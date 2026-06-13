@@ -2,7 +2,39 @@
 -- Unity - 22nd Anniversary group mission (Blackburrow: Unity)
 -- Created by: RedFrog
 -- Created: June 10, 2026
--- Version 0.28 - level-spread warning (>10): wide spread HARD-BLOCKS the
+-- Version 0.34 - collection report ~11 queries/member -> 1: ROOT CAUSE
+--   was cmdf parsing embedded ${} locally so the DanNet Q key never
+--   matched = full 1.5s timeout on EVERY item query (and nil results -
+--   boxes read as 0 pages). Fix: /noparse dquery + identical raw key;
+--   all 8 item checks encoded in one Math.Calc (pages = base-10 digits,
+--   feather = 8th); member lvl/cls/zone from instant local Group TLOs.
+-- 0.33 - turn-in success = all 7 handed AND feathers verified on
+--   everyone who lacked one (was: given > 0 declared victory on partial
+--   hand-ins); Pause now pauses the WHOLE CREW (boxes get the same
+--   driver-family command; CWTN via noparse docommand so each box
+--   resolves its own class); "already has Feather" announced once per
+--   session instead of every refresh.
+-- 0.32 - page holders tracked by name table (substring :find
+--   suppressed "Ann" when "Joanna" held the page); despawn (leash/depop)
+--   no longer counted as a kill and is reported distinctly.
+-- 0.31 - Axtig aggro: warning throttled to 1/10s (was 4/sec
+--   flooding the debug ring buffer), sweep HOLDS while he's the
+--   remaining hater (assists/AE could clip him), TURN_IN transition
+--   blocked on his aggro too. Lockout parser sums optional Nd/Nh/Nm/Ns
+--   components (full-shape regex died on sub-day messages).
+-- 0.30 - Pause is real + thread-safe: button and driver combo
+--   set flags only (no mq.cmd from render thread); pauseGate holds in
+--   waitFor and every long loop (kill seek/fight with attack off-on,
+--   gather, turn-in nav), stopping movement first, resuming travel after.
+--   Stop exits silently everywhere (stateTravel, turn-in waits) and can
+--   never fall through into the give loop and hand pages over.
+-- 0.29 - skip blacklist (2 min expiry, mobs path home): every
+--   unreachable/timed-out mob is blacklisted in both nearestTrash and
+--   aggroedMobId; candidates[1] fallback removed; nearestTrash returns
+--   -1 (nothing reachable, wait) vs 0 (truly cleared). Haters beyond 30
+--   units get gap-closing nav. TURN_IN requires clean hater list and
+--   the Ralf nav fights through aggro (v0.23 rule applied).
+-- 0.28 - level-spread warning (>10): wide spread HARD-BLOCKS the
 --   shared task request (82 in a 115 group = game refuses at Blevins;
 --   threshold TBC). Scaling note: all-115 group drew 112-113 mobs.
 -- 0.27 - feather stash after turn-in: arrives on cursor for every
@@ -81,7 +113,7 @@
 local mq = require('mq')
 require('ImGui')
 
-local version = "0.28"
+local version = "0.34"
 
 -- Spawn names from in-game recon 2026-06-11 (208 NPCs in fresh instance).
 -- Commanders/Axtig deliberately NOT in this set - commander pipeline handles
@@ -121,6 +153,8 @@ local gui = {
     requestInvite = false,
     requestRefresh = false,
     requestGather = false,
+    requestPauseToggle = false,
+    requestDriverDetect = false,
     driver = nil,
     driverOverride = 'auto',
     peers = {},        -- ungrouped DanNet peers: {peer, charName, cls, lvl, zone, include}
@@ -162,12 +196,24 @@ end
 
 -- Utility Functions
 
--- All waits abort when Stop is clicked
+-- Hold here while Pause is on (stops movement first). Returns false if
+-- Stop was clicked - callers bail out.
+local function pauseGate()
+    if not gui.paused then return not gui.requestStop end
+    if mq.TLO.Navigation.Active() then mq.cmd('/squelch /nav stop') end
+    while gui.paused and not gui.requestStop do
+        mq.delay(250)
+    end
+    return not gui.requestStop
+end
+
+-- All waits abort on Stop and hold during Pause (timeout clock frozen)
 local function waitFor(conditionFunc, timeoutMs, checkIntervalMs)
     checkIntervalMs = checkIntervalMs or 100
     local elapsed = 0
     while elapsed < timeoutMs do
         if gui.requestStop then return false end
+        if gui.paused and not pauseGate() then return false end
         if conditionFunc() then return true end
         mq.delay(checkIntervalMs)
         elapsed = elapsed + checkIntervalMs
@@ -193,6 +239,17 @@ end
 -- DanNet query pattern from rgmercs lib/dannet/helpers.lua (vetted)
 local function dquery(peer, query)
     mq.cmdf('/dquery %s -q "%s"', peer, query)
+    mq.delay(25)
+    mq.delay(1500, function() return (mq.TLO.DanNet(peer).Q(query).Received() or 0) > 0 end)
+    return mq.TLO.DanNet(peer).Q(query)()
+end
+
+-- For queries with embedded ${} (Math.Calc over FindItemCount etc):
+-- /noparse so the DRIVER doesn't evaluate the ${} before sending. The
+-- poll key must be the identical raw string or Received never fires -
+-- that key mismatch was burning the full timeout on every item query.
+local function dqueryNoparse(peer, query)
+    mq.cmd('/noparse /dquery ' .. peer .. ' -q "' .. query .. '"')
     mq.delay(25)
     mq.delay(1500, function() return (mq.TLO.DanNet(peer).Q(query).Received() or 0) > 0 end)
     return mq.TLO.DanNet(peer).Q(query)()
@@ -225,17 +282,33 @@ local function ungroupedPeers()
     return peers
 end
 
--- Inventory + bank count for any group member (self local, others DanNet)
-local function memberItemCount(memberName, itemName)
-    if memberName == mq.TLO.Me.CleanName() then
-        return (mq.TLO.FindItemCount('=' .. itemName)() or 0) + (mq.TLO.FindItemBankCount('=' .. itemName)() or 0)
+-- Whole collection (7 pages + feather) in ONE query: page counts as
+-- base-10 digits (page 1 = ones place), feather flag at the 8th digit.
+-- One round-trip per member instead of eight. Assumes nobody holds 10+
+-- copies of one page (would carry into the next digit).
+local PAGE_MULT = { 1, 10, 100, 1000, 10000, 100000, 1000000 }
+
+local function collectionQuery()
+    local parts = { '${If[${FindItemCount[=Unified Phoenix Feather]},1,0]}*10000000' }
+    for i = 7, 1, -1 do
+        local page = string.format("Torn Old Book - Page %d", i)
+        parts[#parts + 1] = string.format('(${FindItemCount[=%s]}+${FindItemBankCount[=%s]})*%d', page, page, PAGE_MULT[i])
     end
-    local result = dquery(memberName:lower(),
-        string.format('Math.Calc[${FindItemCount[=%s]}+${FindItemBankCount[=%s]}]', itemName, itemName))
-    return tonumber(result) or 0
+    return 'Math.Calc[' .. table.concat(parts, '+') .. ']'
+end
+
+local function decodeCollection(value)
+    local n = math.floor(tonumber(value) or 0)
+    local counts = {}
+    for i = 1, 7 do
+        counts[i] = math.floor(n / PAGE_MULT[i]) % 10
+    end
+    return n >= 10000000, counts
 end
 
 -- Cached Roster + Collection Report (main loop writes, render reads)
+
+local featherAnnounced = {}
 
 local function refreshPeers()
     -- Full group = nobody to invite = no reason to query all of DanNet
@@ -256,38 +329,68 @@ end
 
 local function refreshCollection()
     setStatus("Refreshing collection report...")
+    local query = collectionQuery()
     local members = {}
-    for _, name in ipairs(groupMemberNames()) do
-        local m = { name = name, feather = false, pageCount = 0 }
-        if name == mq.TLO.Me.CleanName() then
-            m.lvl = mq.TLO.Me.Level() or 0
-            m.cls = mq.TLO.Me.Class.ShortName() or "?"
-            m.zone = mq.TLO.Zone.ShortName() or "?"
-        else
-            m.lvl = dquery(name:lower(), 'Me.Level') or "?"
-            m.cls = dquery(name:lower(), 'Me.Class.ShortName') or "?"
-            m.zone = dquery(name:lower(), 'Zone.ShortName') or "?"
+
+    -- Self: everything local
+    local myCounts = {}
+    for i = 1, 7 do
+        local page = string.format("Torn Old Book - Page %d", i)
+        myCounts[i] = (mq.TLO.FindItemCount('=' .. page)() or 0) + (mq.TLO.FindItemBankCount('=' .. page)() or 0)
+    end
+    members[1] = {
+        name = mq.TLO.Me.CleanName(),
+        lvl = mq.TLO.Me.Level() or 0,
+        cls = mq.TLO.Me.Class.ShortName() or "?",
+        zone = mq.TLO.Zone.ShortName() or "?",
+        feather = (mq.TLO.FindItemCount("=Unified Phoenix Feather")() or 0) > 0,
+        counts = myCounts,
+        pageCount = 0,
+    }
+
+    -- Boxes: lvl/cls/zone from instant local Group TLOs (no DanNet);
+    -- whole collection in one decoded round-trip each
+    for gi = 1, (mq.TLO.Group.Members() or 0) do
+        local gm = mq.TLO.Group.Member(gi)
+        if gm.CleanName() and not gm.Mercenary() then
+            local name = gm.CleanName()
+            setStatus("Checking " .. name .. "...")
+            local feather, counts = decodeCollection(dqueryNoparse(name:lower(), query))
+            members[#members + 1] = {
+                name = name,
+                lvl = gm.Level() or "?",
+                cls = gm.Class.ShortName() or "?",
+                zone = (gm.Spawn.ID() or 0) > 0 and (mq.TLO.Zone.ShortName() or "?") or "elsewhere",
+                feather = feather,
+                counts = counts,
+                pageCount = 0,
+            }
         end
-        m.feather = memberItemCount(name, "Unified Phoenix Feather") > 0 -- TBC: exact item name
-        if m.feather then warn(string.format("%s ALREADY HAS the Unified Phoenix Feather", name)) end
-        members[#members + 1] = m
+    end
+
+    for _, m in ipairs(members) do
+        if m.feather and not featherAnnounced[m.name] then
+            featherAnnounced[m.name] = true -- announce once per session, not every refresh
+            info(string.format("%s already has the Unified Phoenix Feather", m.name))
+        end
     end
 
     local covered = 0
     for i = 1, 7 do
-        local pageName = string.format("Torn Old Book - Page %d", i) -- confirmed in-game 2026-06-11
         local holders = {}
+        local names = {}
         local extra = false
         for _, m in ipairs(members) do
-            local n = memberItemCount(m.name, pageName)
+            local n = m.counts[i] or 0
             if n > 0 then
                 m.pageCount = m.pageCount + n
+                names[m.name] = true
                 holders[#holders + 1] = (n > 1) and string.format("%s x%d", m.name, n) or m.name
                 if n > 1 then extra = true end
             end
         end
         if #holders > 0 then covered = covered + 1 end
-        gui.pages[i] = { holders = (#holders > 0) and table.concat(holders, ", ") or nil, extra = extra }
+        gui.pages[i] = { holders = (#holders > 0) and table.concat(holders, ", ") or nil, names = names, extra = extra }
     end
     gui.members = members
     gui.covered = covered
@@ -328,12 +431,15 @@ local function notePageLooted(who, raw)
     who = (who or "?"):gsub("^[%-%s]+", "")
     local page = gui.pages[i]
     if page and page.holders then
-        if not page.holders:find(who, 1, true) then
+        -- membership by name table, not substring - "Ann" vs "Joanna"
+        page.names = page.names or {}
+        if not page.names[who] then
+            page.names[who] = true
             page.holders = page.holders .. ", " .. who
             page.extra = true
         end
     else
-        gui.pages[i] = { holders = who, extra = false }
+        gui.pages[i] = { holders = who, names = { [who] = true }, extra = false }
         gui.covered = gui.covered + 1
     end
     info(string.format("%s looted Page %d - %d of 7 covered!", who, i, gui.covered))
@@ -374,27 +480,38 @@ local function detectCombatDriver()
     return nil
 end
 
+-- Pause/unpause the whole crew, not just the driver. Assumes boxes run
+-- the same automation family as the driver. CWTN commands are per-class,
+-- so boxes get a noparse /docommand and resolve their own ${CWTN.Command}.
 local function driverPause()
     if gui.driver == 'boxr' then
         mq.cmd('/boxr pause')
+        othersCmd('/boxr pause')
     elseif gui.driver == 'cwtn' then
         mq.cmdf('/%s pause on', mq.TLO.CWTN.Command())
+        if not isSolo() then mq.cmd('/noparse /dgge /docommand /${CWTN.Command} pause on') end
     elseif gui.driver == 'rgmercs' then
         mq.cmd('/rgl pause')
+        othersCmd('/rgl pause')
     elseif gui.driver == 'kissassist' then
         mq.cmd('/backoff on')
+        othersCmd('/backoff on')
     end
 end
 
 local function driverUnpause()
     if gui.driver == 'boxr' then
         mq.cmd('/boxr unpause')
+        othersCmd('/boxr unpause')
     elseif gui.driver == 'cwtn' then
         mq.cmdf('/%s pause off', mq.TLO.CWTN.Command())
+        if not isSolo() then mq.cmd('/noparse /dgge /docommand /${CWTN.Command} pause off') end
     elseif gui.driver == 'rgmercs' then
         mq.cmd('/rgl unpause')
+        othersCmd('/rgl unpause')
     elseif gui.driver == 'kissassist' then
         mq.cmd('/backoff off')
+        othersCmd('/backoff off')
     end
 end
 
@@ -467,6 +584,7 @@ local function gatherGroup()
     local deadline = mq.gettime() + 600000
     while mq.gettime() < deadline do
         if gui.requestStop then return end
+        if gui.paused and not pauseGate() then return end
         local here = 0
         local total = 0
         local allClose = true
@@ -513,13 +631,14 @@ local function stateTravel()
         othersCmd('/travelto qeytoqrg')
         mq.cmd('/travelto qeytoqrg')
         if not waitFor(function() return (mq.TLO.Zone.ShortName() or ''):lower() == 'qeytoqrg' end, 600000, 1000) then
-            fail("never reached Qeynos Hills.")
+            if not gui.requestStop then fail("never reached Qeynos Hills.") end
             return false
         end
         mq.delay(3000)
     end
     setStatus("Waiting for group in Qeynos Hills...")
     if not waitFor(function() return not mq.TLO.Group.AnyoneMissing() end, 600000, 1000) then
+        if gui.requestStop then return false end
         warn("group members still missing from Qeynos Hills - continuing anyway")
     end
     return true
@@ -545,11 +664,16 @@ local function stateRequest()
     mq.delay(1500)
 
     local lockoutSeconds = nil
+    -- Sum whatever Nd/Nh/Nm/Ns components appear - the server may omit
+    -- leading units ("59m:12s"), and demanding the full d:h:m:s shape
+    -- would silently drop the event into the retry-and-fail branch
     mq.event('unityLockout', "#*#you must wait #1# before you can request another task#*#", function(_, timeStr)
-        local d, h, m, s = timeStr:match("(%d+)d:(%d+)h:(%d+)m:(%d+)s")
-        if d then
-            lockoutSeconds = ((tonumber(d) * 24 + tonumber(h)) * 60 + tonumber(m)) * 60 + tonumber(s)
+        local total = 0
+        for n, unit in (timeStr or ''):gmatch("(%d+)([dhms])") do
+            local mult = (unit == 'd' and 86400) or (unit == 'h' and 3600) or (unit == 'm' and 60) or 1
+            total = total + (tonumber(n) or 0) * mult
         end
+        if total > 0 then lockoutSeconds = total end
     end)
 
     local gotTask = false
@@ -645,45 +769,73 @@ end
 
 -- Trash Sweep Pipeline (PAGES mode: trash only, commanders skipped)
 
+-- Skip blacklist: unreachable/unkillable mobs get timed out instead of
+-- reselected forever (infinite-loop fix). Expiry matters - mobs path home.
+local skippedIds = {}
+
+local function isSkipped(id)
+    local expiry = skippedIds[id]
+    if expiry and mq.gettime() < expiry then return true end
+    skippedIds[id] = nil
+    return false
+end
+
+local function skipFor(id, ms)
+    skippedIds[id] = mq.gettime() + ms
+end
+
 -- Straight-line distance lies in a multi-level zone (a mob below the
 -- floor looks "closest"). Take the few nearest candidates by line, then
--- pick by actual NAV PATH length - also screens out unreachable mobs.
+-- pick by actual NAV PATH length. Returns: id to kill, 0 = zone truly
+-- cleared, -1 = trash exists but nothing reachable right now.
 local function nearestTrash()
     local candidates = {}
+    local totalTrash = 0
     local count = mq.TLO.SpawnCount('npc')() or 0
     for i = 1, count do
         local s = mq.TLO.NearestSpawn(i, 'npc')
         local name = s.CleanName()
         if name and TRASH_NAMES[name] and (s.Type() or '') == 'NPC' then
-            candidates[#candidates + 1] = s.ID() or 0
-            if #candidates >= 8 then break end
+            totalTrash = totalTrash + 1
+            local id = s.ID() or 0
+            if id > 0 and not isSkipped(id) and #candidates < 8 then
+                candidates[#candidates + 1] = id
+            end
         end
     end
-    local bestId, bestLen = 0, 999999
+    if totalTrash == 0 then return 0 end
+    local bestId, bestLen = -1, 999999
     for _, id in ipairs(candidates) do
         local len = mq.TLO.Navigation.PathLength('id ' .. id)() or -1
-        if len >= 0 and len < bestLen then
+        if len < 0 then
+            skipFor(id, 120000) -- no nav path: blacklist, retry when it moves
+        elseif len < bestLen then
             bestId, bestLen = id, len
         end
-    end
-    if bestId == 0 and #candidates > 0 then
-        return candidates[1] -- no path resolved on any candidate - try nearest anyway
     end
     return bestId
 end
 
 -- ANYTHING on the hater list gets killed before we seek a new target -
 -- ignoring aggro builds trains (Gartik incident). Exception: Axtig is
--- never returned - loud warning instead so the user intervenes.
+-- never returned. Returns (haterId, axtigAggro) - callers hold/abort
+-- when Axtig is on the list.
+local axtigWarnAt = 0
+
 local function aggroedMobId()
     local bestId, bestDist = 0, 999999
+    local axtigAggro = false
     for i = 1, (mq.TLO.Me.XTargetSlots() or 0) do
         local xt = mq.TLO.Me.XTarget(i)
         if (xt.TargetType() or '') == 'Auto Hater' and (xt.ID() or 0) > 0 then
             local name = xt.CleanName() or ''
             if name:find('Axtig') then
-                warn("AXTIG HAS AGGRO - do NOT kill him (completes mission, 2h30m lockout)! Move the group away.")
-            else
+                axtigAggro = true
+                if mq.gettime() - axtigWarnAt > 10000 then -- throttled: called 4x/sec
+                    axtigWarnAt = mq.gettime()
+                    warn("AXTIG HAS AGGRO - do NOT kill him (completes mission, 2h30m lockout)! Move the group away.")
+                end
+            elseif not isSkipped(xt.ID() or 0) then
                 local d = mq.TLO.Spawn(xt.ID()).Distance3D() or 999999
                 if d < bestDist then
                     bestId, bestDist = xt.ID() or 0, d
@@ -691,7 +843,7 @@ local function aggroedMobId()
             end
         end
     end
-    return bestId
+    return bestId, axtigAggro
 end
 
 -- Nav to a mob, engage, wait for the kill. Combat driver does the
@@ -709,9 +861,17 @@ local function killMobById(id, seekIt)
                 mq.cmd('/squelch /nav stop')
                 return
             end
-            if (not mq.TLO.Navigation.Active()) or ((spawn.Distance3D() or 999) < 20) then
+            if gui.paused then
+                if not pauseGate() then return end
+                mq.cmdf('/squelch /nav id %d distance=15', id) -- resume travel
+            end
+            if (spawn.Distance3D() or 999) < 20 then
                 arrived = true
                 break
+            end
+            if not spawn() then break end
+            if not mq.TLO.Navigation.Active() then
+                mq.cmdf('/squelch /nav id %d distance=15', id) -- nav ended short - re-issue, deadline caps it
             end
             -- Aggro en route: STOP and fight where we stand. Marching on
             -- builds a train (cause of the 2026-06-12 wipe). The sweep
@@ -725,8 +885,25 @@ local function killMobById(id, seekIt)
         end
         mq.cmd('/squelch /nav stop')
         if not arrived then
-            warn("could not reach " .. (spawn.CleanName() or "mob") .. " - skipping")
+            skipFor(id, 120000)
+            warn("could not reach " .. (spawn.CleanName() or "mob") .. " - blacklisted for 2 min")
             return
+        end
+    else
+        -- Hater: usually inbound, but one stuck under the world never
+        -- arrives - close the gap ourselves. No aggro interrupt here:
+        -- the target IS the aggro.
+        if (spawn.Distance3D() or 999) > 30 then
+            mq.cmdf('/squelch /nav id %d distance=15', id)
+            if not waitFor(function()
+                return (not mq.TLO.Navigation.Active()) or ((spawn.Distance3D() or 999) < 20)
+            end, 30000, 250) then
+                mq.cmd('/squelch /nav stop')
+                skipFor(id, 120000)
+                warn((spawn.CleanName() or "hater") .. " unreachable - blacklisted for 2 min")
+                return
+            end
+            mq.cmd('/squelch /nav stop')
         end
     end
     if not spawn() or (spawn.Type() or '') ~= 'NPC' then return end
@@ -737,20 +914,31 @@ local function killMobById(id, seekIt)
     mq.cmd('/attack on')
     -- We engaged manually, so facing is OUR job (driver only faces on its
     -- own engages). Re-face every 3s - water mobs swim circles around you.
-    local isCommander = COMMANDER_NAMES[spawn.CleanName() or ''] or false
+    local mobName = spawn.CleanName() or "mob" -- capture before it can despawn
+    local isCommander = COMMANDER_NAMES[mobName] or false
     local deadline = mq.gettime() + 180000
     local lastFace = 0
     local died = false
+    local despawned = false
     local pacified = false
     while mq.gettime() < deadline do
         if gui.requestStop then break end
+        if gui.paused then
+            mq.cmd('/attack off')
+            if not pauseGate() then break end
+            mq.cmd('/attack on')
+        end
         mq.doevents() -- commander [keyword] replies must fire MID-fight
         if mq.TLO.Me.Hovering() or (mq.TLO.Zone.ShortName() or '') ~= 'oldblackburrow_ann22raid' then
             warn("we died or left the zone mid-fight - abandoning this kill.")
             break
         end
         local s = mq.TLO.Spawn(id)
-        if (not s()) or (s.Type() or 'Corpse') == 'Corpse' then
+        if not s() then
+            despawned = true -- leashed/depopped/gated: NOT a kill
+            break
+        end
+        if (s.Type() or '') == 'Corpse' then
             died = true
             break
         end
@@ -778,17 +966,20 @@ local function killMobById(id, seekIt)
     mq.cmd('/attack off')
     if died then
         gui.killCount = gui.killCount + 1
+    elseif despawned then
+        info(mobName .. " despawned mid-fight (leash/depop?) - not counted")
     elseif pacified then
-        info((spawn.CleanName() or "commander") .. " pacified after dialogue - moving on")
+        info(mobName .. " pacified after dialogue - moving on")
     else
-        warn("kill timed out on " .. (spawn.CleanName() or "mob"))
+        skipFor(id, 120000)
+        warn("kill timed out on " .. mobName .. " - blacklisted for 2 min")
     end
 end
 
 -- One sweep step: aggro'd commanders first, then nearest trash.
 -- Returns false when no trash remains (zone cleared).
 local function sweepOneMob()
-    local haterId = aggroedMobId()
+    local haterId, axtigAggro = aggroedMobId()
     if haterId > 0 then
         local name = mq.TLO.Spawn(haterId).CleanName() or "mob"
         if COMMANDER_NAMES[name] then
@@ -797,8 +988,20 @@ local function sweepOneMob()
         killMobById(haterId, false)
         return true
     end
+    -- Axtig is the remaining aggro: HOLD the sweep. Seeking new targets
+    -- with him in tow risks assists/AE clipping him = mission complete.
+    if axtigAggro then
+        setStatus("AXTIG HAS AGGRO - sweep held. Move the group away from him!")
+        mq.delay(2000)
+        return true
+    end
     local id = nearestTrash()
     if id == 0 then return false end
+    if id == -1 then
+        setStatus("No reachable trash right now - waiting for blacklist to expire / mobs to move...")
+        mq.delay(5000)
+        return true
+    end
     killMobById(id, true)
     return true
 end
@@ -835,14 +1038,43 @@ local function stateTurnIn()
     if mq.TLO.Group.GroupSize() ~= nil and mq.TLO.Group.AnyoneMissing() then
         setStatus("Turn-in: waiting for whole group in zone (feather fires on final page)...")
         if not waitFor(function() return not mq.TLO.Group.AnyoneMissing() end, 300000, 1000) then
-            fail("group not all present after 5 min - turn-in aborted. Gather everyone and Start again.")
+            if not gui.requestStop then
+                fail("group not all present after 5 min - turn-in aborted. Gather everyone and Start again.")
+            end
             return false
         end
     end
+    if gui.requestStop then return false end
 
+    -- Snapshot who lacks a feather - success is verified against this
+    local needyBefore = {}
+    for _, m in ipairs(gui.members) do
+        if not m.feather then needyBefore[#needyBefore + 1] = m.name end
+    end
+
+    -- Fight-your-way-there, same as the sweep (v0.23 rule) - aggro en
+    -- route to Ralf gets killed in place, then we resume
+    setStatus("Turn-in: heading to Lorekeeper Ralf (fighting through if needed)...")
+    local navDeadline = mq.gettime() + 180000
+    while (ralf.Distance3D() or 999) > 15 do
+        if gui.requestStop or mq.gettime() > navDeadline then
+            mq.cmd('/squelch /nav stop')
+            if not gui.requestStop then fail("could not reach Lorekeeper Ralf - turn-in aborted.") end
+            return false
+        end
+        if gui.paused and not pauseGate() then return false end
+        local haterId = aggroedMobId()
+        if haterId > 0 then
+            mq.cmd('/squelch /nav stop')
+            info("aggro on the way to Ralf - clearing it first")
+            killMobById(haterId, false)
+        elseif not mq.TLO.Navigation.Active() then
+            mq.cmdf('/squelch /nav id %d distance=12', ralf.ID() or 0)
+        end
+        mq.delay(250)
+    end
+    mq.cmd('/squelch /nav stop')
     setStatus("Turn-in: delivering 7 pages to Lorekeeper Ralf...")
-    mq.cmdf('/squelch /nav id %d distance=12', ralf.ID() or 0)
-    waitFor(function() return (not mq.TLO.Navigation.Active()) and (ralf.Distance3D() or 999) < 15 end, 120000, 250)
     mq.cmdf('/target id %d', ralf.ID() or 0)
     mq.delay(500)
 
@@ -850,6 +1082,7 @@ local function stateTurnIn()
     -- slot; Give button hands the batch over (pattern from giveit/DCM)
     local given = 0
     for i = 1, 7 do
+        if gui.requestStop then return false end -- never hand over pages mid-Stop
         local pageName = string.format("Torn Old Book - Page %d", i)
         if (mq.TLO.FindItemCount('=' .. pageName)() or 0) > 0 then
             mq.cmdf('/itemnotify "%s" leftmouseup', pageName)
@@ -870,7 +1103,12 @@ local function stateTurnIn()
         mq.cmd('/notify GiveWnd GVW_Give_Button leftmouseup')
         mq.delay(2000, function() return not mq.TLO.Window('GiveWnd').Open() end)
     end
-    info(string.format("handed %d pages to Lorekeeper Ralf!", given))
+    if given < 7 then
+        fail(string.format("only %d of 7 pages were handed over - turn-in INCOMPLETE. Check bags/cursor and Start again.", given))
+        refreshCollection()
+        return false
+    end
+    info("handed all 7 pages to Lorekeeper Ralf!")
 
     -- The feather arrives ON THE CURSOR for every member - stash it
     -- before anyone fat-fingers it onto the ground
@@ -888,8 +1126,22 @@ local function stateTurnIn()
         end
     end
 
+    -- Verify: did everyone who lacked a feather actually get one?
     refreshCollection()
-    return given > 0
+    local stillWithout = {}
+    for _, m in ipairs(gui.members) do
+        for _, name in ipairs(needyBefore) do
+            if m.name == name and not m.feather then
+                stillWithout[#stillWithout + 1] = name
+            end
+        end
+    end
+    if #stillWithout > 0 then
+        warn("7 pages handed in but NO Feather detected on: " .. table.concat(stillWithout, ", ") .. " - verify in-game.")
+        return #stillWithout < #needyBefore
+    end
+    info("Feather CONFIRMED for everyone who needed one!")
+    return true
 end
 
 -- Recon: dump unique NPC names + counts. Remove once spawn names known.
@@ -988,8 +1240,12 @@ local function stepStateMachine()
         info("starting trash sweep (commanders handled via dialogue, Axtig never)")
         gui.state = 'SWEEPING'
     elseif gui.state == 'SWEEPING' then
-        if anyoneNeedsFeather() and pagesInMyBags() >= 7 then
-            info("all 7 pages in my bags - heading to Lorekeeper Ralf!")
+        -- Turn-in only with a clean hater list (Axtig included) - page 7
+        -- can land while mobs are still mid-chase, and blind-navving to
+        -- Ralf with live aggro is the exact pattern that caused the wipe
+        local haterId, axtigAggro = aggroedMobId()
+        if anyoneNeedsFeather() and pagesInMyBags() >= 7 and haterId == 0 and not axtigAggro then
+            info("all 7 pages in my bags and no live aggro - heading to Lorekeeper Ralf!")
             gui.state = 'TURN_IN'
         elseif not sweepOneMob() then
             info(string.format("zone cleared - %d kills this run.", gui.killCount))
@@ -1050,10 +1306,7 @@ local function drawGUI()
     -- Buttons (set flags only)
     if ImGui.Button("Start") then gui.requestStart = true end
     ImGui.SameLine()
-    if ImGui.Button(gui.paused and "Resume" or "Pause") then
-        gui.paused = not gui.paused
-        if gui.paused then driverPause() else driverUnpause() end
-    end
+    if ImGui.Button(gui.paused and "Resume" or "Pause") then gui.requestPauseToggle = true end
     ImGui.SameLine()
     if ImGui.Button("Stop") then gui.requestStop = true end
     ImGui.SameLine()
@@ -1110,7 +1363,7 @@ local function drawGUI()
         for _, opt in ipairs({ 'auto', 'boxr', 'cwtn', 'rgmercs', 'kissassist', 'none' }) do
             if ImGui.Selectable(opt, gui.driverOverride == opt) then
                 gui.driverOverride = opt
-                gui.driver = detectCombatDriver()
+                gui.requestDriverDetect = true -- detection runs in main loop, not render
             end
         end
         ImGui.EndCombo()
@@ -1165,6 +1418,16 @@ local function main()
         if gui.requestGather then
             gui.requestGather = false
             gatherGroup()
+        end
+        if gui.requestPauseToggle then
+            gui.requestPauseToggle = false
+            gui.paused = not gui.paused
+            if gui.paused then driverPause() else driverUnpause() end
+        end
+        if gui.requestDriverDetect then
+            gui.requestDriverDetect = false
+            gui.driver = detectCombatDriver()
+            info("driver set: " .. (gui.driver or "none"))
         end
         if not gui.paused then
             stepStateMachine()
