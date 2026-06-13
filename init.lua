@@ -2,7 +2,16 @@
 -- Unity - 22nd Anniversary group mission (Blackburrow: Unity)
 -- Created by: RedFrog
 -- Created: June 10, 2026
--- Version 0.34 - collection report ~11 queries/member -> 1: ROOT CAUSE
+-- Version 0.40 - self-review fixes: decodeCollection unknown on junk (not
+--   just nil); pause no longer counts as turn-in nav stall; hoard warn on edge
+-- 0.39 - page-hoard warn (10+/page breaks digit encoding);
+--   driver feather stash now polls 5s instead of one read
+-- 0.38 - restore box zone diagnostic (dquery only when elsewhere);
+--   partial turn-in clarifies no feather awarded
+-- 0.37 - query no-response = "unknown" not zero; Ralf nav stall bail
+-- 0.36 - feather verify settle+retry; blacklisted hater log
+-- 0.35 - turn-in Axtig hold; DanNet Q key sanity check
+-- 0.34 - collection report ~11 queries/member -> 1: ROOT CAUSE
 --   was cmdf parsing embedded ${} locally so the DanNet Q key never
 --   matched = full 1.5s timeout on EVERY item query (and nil results -
 --   boxes read as 0 pages). Fix: /noparse dquery + identical raw key;
@@ -113,7 +122,7 @@
 local mq = require('mq')
 require('ImGui')
 
-local version = "0.34"
+local version = "0.40"
 
 -- Spawn names from in-game recon 2026-06-11 (208 NPCs in fresh instance).
 -- Commanders/Axtig deliberately NOT in this set - commander pipeline handles
@@ -248,10 +257,22 @@ end
 -- /noparse so the DRIVER doesn't evaluate the ${} before sending. The
 -- poll key must be the identical raw string or Received never fires -
 -- that key mismatch was burning the full timeout on every item query.
+-- One-time sanity check confirms the Q key matches (Received > 0) so a
+-- regression to the key-mismatch class surfaces in the log immediately.
+-- Returns nil on NO RESPONSE (timeout/blip/peer out of zone) - the caller
+-- must distinguish that from a real "0" answer, or a failed query decodes
+-- to "needs everything" and can trigger a bogus turn-in.
+local _qKeyVerified = false
 local function dqueryNoparse(peer, query)
     mq.cmd('/noparse /dquery ' .. peer .. ' -q "' .. query .. '"')
     mq.delay(25)
     mq.delay(1500, function() return (mq.TLO.DanNet(peer).Q(query).Received() or 0) > 0 end)
+    local rx = mq.TLO.DanNet(peer).Q(query).Received() or 0
+    if rx > 0 and not _qKeyVerified then
+        _qKeyVerified = true -- mark only on a real answer; blips keep trying
+        info(string.format("DanNet Q key verified (Received: %d) - collection report is fast.", rx))
+    end
+    if rx == 0 then return nil end
     return mq.TLO.DanNet(peer).Q(query)()
 end
 
@@ -297,8 +318,14 @@ local function collectionQuery()
     return 'Math.Calc[' .. table.concat(parts, '+') .. ']'
 end
 
+-- Unparseable value = query failed (no response, OR the peer answered with
+-- junk: mid-zone TLOs, a Math.Calc error). Return nil, nil so the caller
+-- marks the member "unknown" instead of "has nothing" - a failed query must
+-- never read as needs-feather + zero-pages.
 local function decodeCollection(value)
-    local n = math.floor(tonumber(value) or 0)
+    local n = tonumber(value)
+    if n == nil then return nil, nil end
+    n = math.floor(n)
     local counts = {}
     for i = 1, 7 do
         counts[i] = math.floor(n / PAGE_MULT[i]) % 10
@@ -309,6 +336,7 @@ end
 -- Cached Roster + Collection Report (main loop writes, render reads)
 
 local featherAnnounced = {}
+local wasHoarding = false
 
 local function refreshPeers()
     -- Full group = nobody to invite = no reason to query all of DanNet
@@ -334,9 +362,11 @@ local function refreshCollection()
 
     -- Self: everything local
     local myCounts = {}
+    local myHoard = false
     for i = 1, 7 do
         local page = string.format("Torn Old Book - Page %d", i)
         myCounts[i] = (mq.TLO.FindItemCount('=' .. page)() or 0) + (mq.TLO.FindItemBankCount('=' .. page)() or 0)
+        if myCounts[i] >= 10 then myHoard = true end -- base-10 digit encoding can't represent 10+ per page
     end
     members[1] = {
         name = mq.TLO.Me.CleanName(),
@@ -356,13 +386,21 @@ local function refreshCollection()
             local name = gm.CleanName()
             setStatus("Checking " .. name .. "...")
             local feather, counts = decodeCollection(dqueryNoparse(name:lower(), query))
+            if counts == nil then -- no response: one retry before giving up
+                feather, counts = decodeCollection(dqueryNoparse(name:lower(), query))
+            end
             members[#members + 1] = {
                 name = name,
                 lvl = gm.Level() or "?",
                 cls = gm.Class.ShortName() or "?",
-                zone = (gm.Spawn.ID() or 0) > 0 and (mq.TLO.Zone.ShortName() or "?") or "elsewhere",
-                feather = feather,
-                counts = counts,
+                -- Spawn visible = same zone instance as me (better than a
+                -- ShortName match, which can't tell instances apart). Only
+                -- pay a dquery for the actual zone when they're NOT with me.
+                zone = (gm.Spawn.ID() or 0) > 0 and (mq.TLO.Zone.ShortName() or "?")
+                    or (dquery(name:lower(), 'Zone.ShortName') or "elsewhere"),
+                feather = feather,         -- nil = unknown (query failed)
+                counts = counts,           -- nil = unknown
+                unknown = (counts == nil),
                 pageCount = 0,
             }
         end
@@ -381,7 +419,7 @@ local function refreshCollection()
         local names = {}
         local extra = false
         for _, m in ipairs(members) do
-            local n = m.counts[i] or 0
+            local n = m.counts and m.counts[i] or 0
             if n > 0 then
                 m.pageCount = m.pageCount + n
                 names[m.name] = true
@@ -411,14 +449,23 @@ local function refreshCollection()
     end
 
     local needy = {}
+    local unknown = {}
     for _, m in ipairs(members) do
-        if not m.feather then needy[#needy + 1] = m.name end
+        if m.unknown then unknown[#unknown + 1] = m.name
+        elseif m.feather == false then needy[#needy + 1] = m.name end
     end
-    if #needy == 0 and #members > 0 then
+    if #needy == 0 and #unknown == 0 and #members > 0 then
         info("everyone in the group already has the Unified Phoenix Feather.")
     elseif #needy > 0 then
         info("still needs the Feather: " .. table.concat(needy, ", "))
     end
+    if #unknown > 0 then
+        warn("could not read collection for: " .. table.concat(unknown, ", ") .. " (DanNet no-response) - their pages/feather are UNKNOWN, not zero. Page coverage may be understated.")
+    end
+    if myHoard and not wasHoarding then -- warn on the edge, not every refresh (re-arms when it clears)
+        warn("you hold 10+ of a single page - the encoded page query can't represent that, so the group's decoded page counts may be wrong. Turn in or hand off the surplus; treat box page counts as approximate until then.")
+    end
+    wasHoarding = myHoard
     info(string.format("%d of 7 pages covered across the group", covered))
     setStatus(string.format("Collection report: %d of 7 pages covered.", covered))
 end
@@ -821,6 +868,7 @@ end
 -- never returned. Returns (haterId, axtigAggro) - callers hold/abort
 -- when Axtig is on the list.
 local axtigWarnAt = 0
+local skippedWarnAt = {}
 
 local function aggroedMobId()
     local bestId, bestDist = 0, 999999
@@ -828,6 +876,7 @@ local function aggroedMobId()
     for i = 1, (mq.TLO.Me.XTargetSlots() or 0) do
         local xt = mq.TLO.Me.XTarget(i)
         if (xt.TargetType() or '') == 'Auto Hater' and (xt.ID() or 0) > 0 then
+            local id = xt.ID() or 0
             local name = xt.CleanName() or ''
             if name:find('Axtig') then
                 axtigAggro = true
@@ -835,10 +884,19 @@ local function aggroedMobId()
                     axtigWarnAt = mq.gettime()
                     warn("AXTIG HAS AGGRO - do NOT kill him (completes mission, 2h30m lockout)! Move the group away.")
                 end
-            elseif not isSkipped(xt.ID() or 0) then
-                local d = mq.TLO.Spawn(xt.ID()).Distance3D() or 999999
+            elseif isSkipped(id) then
+                -- Mob is on xtarget but blacklisted (unreachable/timed-out).
+                -- Log once per expiry window so the user knows why we're
+                -- ignoring an active aggro indicator instead of looking hung.
+                local now = mq.gettime()
+                if not skippedWarnAt[id] or now - skippedWarnAt[id] > 30000 then
+                    skippedWarnAt[id] = now
+                    info(string.format("%s [%d] has aggro but is blacklisted (unreachable/leashed) - ignoring until expiry.", name, id))
+                end
+            else
+                local d = mq.TLO.Spawn(id).Distance3D() or 999999
                 if d < bestDist then
-                    bestId, bestDist = xt.ID() or 0, d
+                    bestId, bestDist = id, d
                 end
             end
         end
@@ -1010,7 +1068,7 @@ end
 
 local function anyoneNeedsFeather()
     for _, m in ipairs(gui.members) do
-        if not m.feather then return true end
+        if m.feather == false then return true end -- == false: unknown (nil) doesn't force a turn-in
     end
     return #gui.members == 0 -- no report yet: assume someone needs it
 end
@@ -1049,27 +1107,61 @@ local function stateTurnIn()
     -- Snapshot who lacks a feather - success is verified against this
     local needyBefore = {}
     for _, m in ipairs(gui.members) do
-        if not m.feather then needyBefore[#needyBefore + 1] = m.name end
+        if m.feather == false then needyBefore[#needyBefore + 1] = m.name end
     end
 
     -- Fight-your-way-there, same as the sweep (v0.23 rule) - aggro en
-    -- route to Ralf gets killed in place, then we resume
+    -- route to Ralf gets killed in place, then we resume. Stall detection
+    -- gives up early if the path never closes (navmesh gap, Ralf moved) -
+    -- the 180s blanket is only the absolute backstop.
     setStatus("Turn-in: heading to Lorekeeper Ralf (fighting through if needed)...")
     local navDeadline = mq.gettime() + 180000
+    local lastDist, stallSince = ralf.Distance3D() or 999, mq.gettime()
     while (ralf.Distance3D() or 999) > 15 do
         if gui.requestStop or mq.gettime() > navDeadline then
             mq.cmd('/squelch /nav stop')
             if not gui.requestStop then fail("could not reach Lorekeeper Ralf - turn-in aborted.") end
             return false
         end
-        if gui.paused and not pauseGate() then return false end
-        local haterId = aggroedMobId()
+        if not ralf() then
+            mq.cmd('/squelch /nav stop')
+            fail("Lorekeeper Ralf despawned during approach - turn-in aborted.")
+            return false
+        end
+        if gui.paused then
+            local pausedAt = mq.gettime()
+            if not pauseGate() then return false end
+            local pausedFor = mq.gettime() - pausedAt -- paused time isn't a stall; shift both clocks
+            stallSince = stallSince + pausedFor
+            navDeadline = navDeadline + pausedFor
+        end
+        local haterId, axtigAggro = aggroedMobId()
         if haterId > 0 then
             mq.cmd('/squelch /nav stop')
             info("aggro on the way to Ralf - clearing it first")
             killMobById(haterId, false)
-        elseif not mq.TLO.Navigation.Active() then
-            mq.cmdf('/squelch /nav id %d distance=12', ralf.ID() or 0)
+            stallSince = mq.gettime() -- fighting isn't stalling; reset the clock
+        elseif axtigAggro then
+            -- Axtig is the only hater: hold nav. The driver's assists/AE
+            -- can clip him if we keep moving = mission complete + 2h30m lockout.
+            mq.cmd('/squelch /nav stop')
+            setStatus("Turn-in HELD - Axtig has aggro! Move the group away from him.")
+            mq.delay(2000)
+            stallSince = mq.gettime() -- holding isn't stalling
+        else
+            -- Travelling: track progress. 20s with no distance closed means
+            -- /nav can't reach Ralf - bail instead of spinning for 3 minutes.
+            local dist = ralf.Distance3D() or 999
+            if dist < lastDist - 1 then
+                lastDist, stallSince = dist, mq.gettime()
+            elseif mq.gettime() - stallSince > 20000 then
+                mq.cmd('/squelch /nav stop')
+                fail("no path to Lorekeeper Ralf (20s no progress) - turn-in aborted. Move the driver closer and Start again.")
+                return false
+            end
+            if not mq.TLO.Navigation.Active() then
+                mq.cmdf('/squelch /nav id %d distance=12', ralf.ID() or 0)
+            end
         end
         mq.delay(250)
     end
@@ -1105,15 +1197,17 @@ local function stateTurnIn()
     end
     if given < 7 then
         fail(string.format("only %d of 7 pages were handed over - turn-in INCOMPLETE. Check bags/cursor and Start again.", given))
+        info("no feather is awarded on a partial turn-in - the report below still lists everyone as needing one, which is correct.")
         refreshCollection()
         return false
     end
     info("handed all 7 pages to Lorekeeper Ralf!")
 
     -- The feather arrives ON THE CURSOR for every member - stash it
-    -- before anyone fat-fingers it onto the ground
-    mq.delay(1500)
-    if (mq.TLO.Cursor.Name() or '') == "Unified Phoenix Feather" then
+    -- before anyone fat-fingers it onto the ground. Poll rather than a
+    -- single read: a late cursor would miss the stash and risk a drop.
+    -- This wait also gives the boxes' feathers time to land before the loop.
+    if waitFor(function() return (mq.TLO.Cursor.Name() or '') == "Unified Phoenix Feather" end, 5000, 100) then
         info("UNIFIED PHOENIX FEATHER received - putting it in my bags!")
         mq.cmd('/autoinventory')
     end
@@ -1126,15 +1220,33 @@ local function stateTurnIn()
         end
     end
 
+    -- Settle before verify: /dex autoinventory is async (command travel +
+    -- server round-trip + DanNet propagation = 3-5s on a busy server).
+    -- Querying immediately would race and show the feather still on cursor.
+    mq.delay(4000)
+
     -- Verify: did everyone who lacked a feather actually get one?
-    refreshCollection()
-    local stillWithout = {}
-    for _, m in ipairs(gui.members) do
-        for _, name in ipairs(needyBefore) do
-            if m.name == name and not m.feather then
-                stillWithout[#stillWithout + 1] = name
+    local function checkStillWithout()
+        local t = {}
+        for _, m in ipairs(gui.members) do
+            for _, name in ipairs(needyBefore) do
+                if m.name == name and m.feather == false then -- == false: don't flag unknown as a miss
+                    t[#t + 1] = name
+                end
             end
         end
+        return t
+    end
+
+    refreshCollection()
+    local stillWithout = checkStillWithout()
+    if #stillWithout > 0 then
+        -- One retry in case autoinventory was still in-flight during the
+        -- first check. A real miss should still show on the second pass.
+        info("re-checking feathers in 4s (autoinventory may still be propagating)...")
+        mq.delay(4000)
+        refreshCollection()
+        stillWithout = checkStillWithout()
     end
     if #stillWithout > 0 then
         warn("7 pages handed in but NO Feather detected on: " .. table.concat(stillWithout, ", ") .. " - verify in-game.")
@@ -1321,9 +1433,10 @@ local function drawGUI()
     -- Group panel
     if ImGui.CollapsingHeader(string.format("Group (%d/6)###grouphdr", #gui.members), ImGuiTreeNodeFlags.DefaultOpen) then
         for _, m in ipairs(gui.members) do
-            ImGui.Text(string.format("  %-12s %3s %-4s %-14s %s  pages: %d",
+            ImGui.Text(string.format("  %-12s %3s %-4s %-14s %s  pages: %s",
                 m.name, tostring(m.lvl), tostring(m.cls), tostring(m.zone),
-                m.feather and "FEATHER" or "       ", m.pageCount))
+                m.unknown and "   ?   " or (m.feather and "FEATHER" or "       "),
+                m.unknown and "?" or tostring(m.pageCount)))
         end
         if #gui.peers > 0 then
             ImGui.Text("Not grouped:")
