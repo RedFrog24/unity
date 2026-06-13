@@ -49,7 +49,7 @@ jobs:
         env:
           REDGUIDES_API_KEY: ${{ secrets.REDGUIDES_API_KEY }}
         with:
-          resource_id: "3326"
+          resource_id: "3327"
           version: "${{ github.event_name == 'workflow_dispatch' && github.event.inputs.version || github.event.release.tag_name }}"
           file: "${{ github.event.repository.name }}_${{ github.event_name == 'workflow_dispatch' && github.event.inputs.version || github.event.release.tag_name }}.zip"
           message: "rg_release_notes.md"
