@@ -2,7 +2,9 @@
 -- Unity - 22nd Anniversary group mission (Blackburrow: Unity)
 -- Created by: RedFrog
 -- Created: June 10, 2026
--- Version 0.41 - PERMA_NOTRY: two static walled-off gnolls (a guard, a scout)
+-- Version 0.42 - Full Quest Axtig kill BUILT (was just a label): after
+--   feathers, nav + kill Axtig; success requires his corpse, aggro-first loop
+-- 0.41 - PERMA_NOTRY: two static walled-off gnolls (a guard, a scout)
 --   ignored by loc - not counted as trash, never targeted
 -- 0.40 - self-review fixes: decodeCollection unknown on junk (not
 --   just nil); pause no longer counts as turn-in nav stall; hoard warn on edge
@@ -124,7 +126,7 @@
 local mq = require('mq')
 require('ImGui')
 
-local version = "0.41"
+local version = "0.42"
 
 -- Spawn names from in-game recon 2026-06-11 (208 NPCs in fresh instance).
 -- Commanders/Axtig deliberately NOT in this set - commander pipeline handles
@@ -1278,6 +1280,52 @@ local function stateTurnIn()
     return true
 end
 
+-- Full Quest only: kill Axtig the Uniter AFTER feathers are done. Killing
+-- him COMPLETES the mission (~2h30m lockout) - the Full Quest toggle is the
+-- consent (its tooltip warns of the lockout). Knockback is NOT mitigated per
+-- AL's config. Reuses killMobById (nav + engage + re-face + wipe/zone abort)
+-- in a guarded loop so an en-route aggro bail or short nav just retries.
+local function stateAxtig()
+    if not gui.fullQuest then return end -- toggled off mid-flight
+    if anyoneNeedsFeather() then
+        warn("Full Quest: not everyone has a Feather yet - feather ALWAYS first, NOT engaging Axtig. Holding.")
+        return
+    end
+    local axtigId = mq.TLO.Spawn("npc Axtig").ID() or 0
+    if axtigId == 0 then
+        warn("Full Quest ON but Axtig isn't spawned (he appears after the commanders die). Holding - kill the commanders, then Start again.")
+        return
+    end
+    warn("Full Quest: engaging AXTIG THE UNITER - this COMPLETES the mission (~2h30m lockout). Knockback expected (no levitate per config).")
+
+    local deadline = mq.gettime() + 360000
+    local axtigDied = false
+    while mq.gettime() < deadline do
+        if gui.requestStop then return end
+        if mq.TLO.Me.Hovering() or (mq.TLO.Zone.ShortName() or '') ~= 'oldblackburrow_ann22raid' then
+            warn("died or left the zone before Axtig fell - Full Quest aborted.")
+            return
+        end
+        local s = mq.TLO.Spawn(axtigId)
+        if not s() then break end                            -- despawned (NOT a confirmed kill)
+        if (s.Type() or '') == 'Corpse' then axtigDied = true; break end
+        -- Clear any non-Axtig aggro first (en-route trash) so we don't keep
+        -- re-navving into the same mob - aggroedMobId never returns Axtig.
+        local haterId = aggroedMobId()
+        if haterId > 0 then
+            killMobById(haterId, false)
+        else
+            killMobById(axtigId, true)
+        end
+    end
+
+    if axtigDied then
+        info("AXTIG THE UNITER IS DOWN - mission COMPLETE. ~2h30m completion lockout now active; coins + rewards delivered. Drop the task / exit when ready.")
+    else
+        fail("Axtig not confirmed dead (despawn, timeout, or abort) - mission may NOT be complete. Verify in-game before assuming the lockout.")
+    end
+end
+
 -- Recon: dump unique NPC names + counts. Remove once spawn names known.
 local function reconSpawns()
     local counts = {}
@@ -1312,7 +1360,7 @@ local function stepStateMachine()
     -- Wipe/eject check: instance states are only valid INSIDE the
     -- instance. Death respawn (PoK) or boot must reset, or the machine
     -- sticks in a state that no longer matches reality.
-    if (gui.state == 'IN_INSTANCE' or gui.state == 'SWEEPING' or gui.state == 'TURN_IN' or gui.state == 'HOLD')
+    if (gui.state == 'IN_INSTANCE' or gui.state == 'SWEEPING' or gui.state == 'TURN_IN' or gui.state == 'AXTIG' or gui.state == 'HOLD')
         and (mq.TLO.Zone.ShortName() or '') ~= 'oldblackburrow_ann22raid' then
         warn("no longer in the instance (death or eject) - press Start to regroup and re-enter.")
         setStatus("Out of instance. Press Start to head back in.")
@@ -1384,16 +1432,28 @@ local function stepStateMachine()
         elseif not sweepOneMob() then
             info(string.format("zone cleared - %d kills this run.", gui.killCount))
             refreshCollection() -- authoritative recount after the run
-            setStatus(string.format("Zone cleared, %d kills. %d of 7 pages. (Exit pipeline next version)",
-                gui.killCount, gui.covered))
-            gui.state = 'HOLD'
+            if gui.fullQuest and not anyoneNeedsFeather() then
+                info("Full Quest ON and everyone has feathers - proceeding to Axtig.")
+                gui.state = 'AXTIG'
+            else
+                setStatus(string.format("Zone cleared, %d kills. %d of 7 pages. (Exit pipeline next version)",
+                    gui.killCount, gui.covered))
+                gui.state = 'HOLD'
+            end
         end
     elseif gui.state == 'TURN_IN' then
-        if stateTurnIn() then
-            setStatus(gui.fullQuest
-                and "Feather delivered! Full Quest ON - Axtig pipeline not built yet, holding."
-                or "Feather delivered! Drop the task when ready. (Exit pipeline next version)")
+        local delivered = stateTurnIn()
+        if delivered and gui.fullQuest then
+            info("Feather delivered! Full Quest ON - proceeding to Axtig.")
+            gui.state = 'AXTIG'
+        else
+            if delivered then
+                setStatus("Feather delivered! Drop the task when ready. (Exit pipeline next version)")
+            end
+            gui.state = 'HOLD'
         end
+    elseif gui.state == 'AXTIG' then
+        stateAxtig()
         gui.state = 'HOLD'
     elseif gui.state == 'HOLD' then
         -- exit / re-request pipeline lands here next
@@ -1405,6 +1465,7 @@ end
 local stateColors = {
     IDLE = { 0.8, 0.8, 0.8, 1 },
     HOLD = { 1.0, 0.8, 0.2, 1 },
+    AXTIG = { 1.0, 0.3, 0.3, 1 }, -- danger: mission-completing kill in progress
 }
 
 local function drawGUI()
