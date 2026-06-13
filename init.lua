@@ -2,7 +2,9 @@
 -- Unity - 22nd Anniversary group mission (Blackburrow: Unity)
 -- Created by: RedFrog
 -- Created: June 10, 2026
--- Version 0.40 - self-review fixes: decodeCollection unknown on junk (not
+-- Version 0.41 - PERMA_NOTRY: two static walled-off gnolls (a guard, a scout)
+--   ignored by loc - not counted as trash, never targeted
+-- 0.40 - self-review fixes: decodeCollection unknown on junk (not
 --   just nil); pause no longer counts as turn-in nav stall; hoard warn on edge
 -- 0.39 - page-hoard warn (10+/page breaks digit encoding);
 --   driver feather stash now polls 5s instead of one read
@@ -122,7 +124,7 @@
 local mq = require('mq')
 require('ImGui')
 
-local version = "0.40"
+local version = "0.41"
 
 -- Spawn names from in-game recon 2026-06-11 (208 NPCs in fresh instance).
 -- Commanders/Axtig deliberately NOT in this set - commander pipeline handles
@@ -831,6 +833,26 @@ local function skipFor(id, ms)
     skippedIds[id] = mq.gettime() + ms
 end
 
+-- Two static gnolls (a guard, a scout) sit walled off in part of the normal
+-- zone that's sealed in the anniversary instance - reachable nowhere, almost
+-- certainly a dev oversight. Permanently ignore anything parked on these exact
+-- locs (loc order Y, X, Z) so the sweep never counts them as trash or burns a
+-- pathing attempt on them. Static spawns land on the same spot every instance.
+local PERMA_NOTRY = {
+    { y = 59.00, x = -563.00, z = -179.81 },
+    { y = 72.00, x = -553.00, z = -179.80 },
+}
+
+local function isPermaNoTry(spawn)
+    local sx, sy, sz = spawn.X() or 0, spawn.Y() or 0, spawn.Z() or 0
+    for _, p in ipairs(PERMA_NOTRY) do
+        if math.abs(sx - p.x) < 5 and math.abs(sy - p.y) < 5 and math.abs(sz - p.z) < 5 then
+            return true
+        end
+    end
+    return false
+end
+
 -- Straight-line distance lies in a multi-level zone (a mob below the
 -- floor looks "closest"). Take the few nearest candidates by line, then
 -- pick by actual NAV PATH length. Returns: id to kill, 0 = zone truly
@@ -842,7 +864,7 @@ local function nearestTrash()
     for i = 1, count do
         local s = mq.TLO.NearestSpawn(i, 'npc')
         local name = s.CleanName()
-        if name and TRASH_NAMES[name] and (s.Type() or '') == 'NPC' then
+        if name and TRASH_NAMES[name] and (s.Type() or '') == 'NPC' and not isPermaNoTry(s) then
             totalTrash = totalTrash + 1
             local id = s.ID() or 0
             if id > 0 and not isSkipped(id) and #candidates < 8 then
