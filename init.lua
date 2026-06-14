@@ -2,7 +2,26 @@
 -- Unity - 22nd Anniversary group mission (Blackburrow: Unity)
 -- Created by: RedFrog
 -- Created: June 10, 2026
--- Version 0.42 - Full Quest Axtig kill BUILT (was just a label): after
+-- Version 0.49 - release self-check: recovery success now verified by the box
+--   being VISIBLE to the driver (same instance), not just zone shortname
+-- 0.48 - razorgill log spam fixed: announce ONCE per session (was
+--   per-id 30s throttle = one line per fish; a school never leashes in an
+--   instance so it spammed forever)
+-- 0.47 - two more walled-off scouts added to PERMA_NOTRY (4 total)
+-- 0.46 - dead-box recovery: a member that dies + respawns in PoK is
+--   driven back via Qeynos Hills -> Blevins -> Ready (sweep pauses); fixed
+--   gatherGroup's broken /travelto-into-instance; cooldown stops recovery loops
+-- 0.45 - combat control rewritten for MIXED teams (tower model):
+--   Boxr-first universal, else broadcast ALL families (CWTN/KA/RGMercs) so
+--   every box self-selects; Start now unpauses + sets the crew to chase the
+--   driver (fixes boxes stranded paused/idle at zone-in)
+-- 0.44 - sweep re-widened to ALL trash (reaver/shaman/snake added) so
+--   commanders get pulled (Axtig spawns) + no missed pages; razorgills now
+--   disengaged (water mob - blacklist + move on); Axtig kill confirmed via the
+--   "Defeat Axtig" task objective (Status Done) with corpse as fallback
+-- 0.43 - Full Quest exit: after a confirmed Axtig kill, /taskquit
+--   the whole crew and wait out the ~1-2 min boot to Blevins, then IDLE
+-- 0.42 - Full Quest Axtig kill BUILT (was just a label): after
 --   feathers, nav + kill Axtig; success requires his corpse, aggro-first loop
 -- 0.41 - PERMA_NOTRY: two static walled-off gnolls (a guard, a scout)
 --   ignored by loc - not counted as trash, never targeted
@@ -126,7 +145,7 @@
 local mq = require('mq')
 require('ImGui')
 
-local version = "0.42"
+local version = "0.49"
 
 -- Spawn names from in-game recon 2026-06-11 (208 NPCs in fresh instance).
 -- Commanders/Axtig deliberately NOT in this set - commander pipeline handles
@@ -135,11 +154,21 @@ local version = "0.42"
 -- guard, scout. Reavers/shamans/snakes/razorgills drop nothing - not
 -- sought, but still die if they aggro (hater-first rule). Burly gnolls
 -- kept: named chain for the geode aug, not pages.
+-- Sweep targets ALL trash, not just confirmed page-droppers. A full clear is
+-- free (1h request lockout), and narrowing to droppers (v0.26) backfired:
+-- missed pages (a shaman DID drop one) and the narrow path skipped commanders
+-- so they didn't get pulled = Axtig wouldn't spawn for Full Quest (AL 2026-06-13).
+-- Killing everything makes the drop table irrelevant and pulls every commander.
+-- Razorgills are deliberately OMITTED - they're water mobs we disengage from
+-- (see aggroedMobId), not seek.
 local TRASH_NAMES = {
     ["a digger"] = true,
     ["a gnoll"] = true,
     ["a guard"] = true,
     ["a scout"] = true,
+    ["a reaver"] = true,
+    ["a shaman"] = true,
+    ["a giant snake"] = true,
     ["a burly gnoll"] = true,      -- placeholder for the rare - cycle it
     ["a very burly gnoll"] = true, -- rare named, geode aug - kill on sight
 }
@@ -518,7 +547,13 @@ mq.event('unityKeyword', "#1# says#*#[#2#]#*#", function(_, npc, keyword)
     end
 end)
 
--- Combat Driver Adapter
+-- Combat Driver Adapter (broadcast-all model, from missions_anniversarytower)
+-- gui.driver = the DRIVER's OWN automation (one family) - used for its own
+-- pause/unpause + the GUI label. Commands to the BOXES are broadcast: Boxr-
+-- first (its /boxr command is universal across CWTN/KA/RGMercs/MuleAssist/
+-- Entropy); without Boxr we send EVERY family's command and each box obeys its
+-- own + ignores the rest - so a MIXED crew (CWTN tank/KA healer/RGMercs DPS)
+-- needs no per-member detection.
 
 local function detectCombatDriver()
     if gui.driverOverride ~= 'auto' then
@@ -531,38 +566,76 @@ local function detectCombatDriver()
     return nil
 end
 
--- Pause/unpause the whole crew, not just the driver. Assumes boxes run
--- the same automation family as the driver. CWTN commands are per-class,
--- so boxes get a noparse /docommand and resolve their own ${CWTN.Command}.
-local function driverPause()
+-- Which families to broadcast to the boxes. Override forces one; else Boxr-
+-- first (universal), else all non-boxr families at once.
+local function broadcastFamilies()
+    if gui.driverOverride ~= 'auto' then
+        if gui.driverOverride == 'none' then return {} end
+        return { gui.driverOverride }
+    end
+    if mq.TLO.Plugin('MQ2Boxr').IsLoaded() then return { 'boxr' } end
+    return { 'cwtn', 'kissassist', 'rgmercs' }
+end
+
+-- Pause/unpause the DRIVER's own automation (one family we run ourselves).
+local function selfCombat(pause)
     if gui.driver == 'boxr' then
-        mq.cmd('/boxr pause')
-        othersCmd('/boxr pause')
+        mq.cmd(pause and '/boxr pause' or '/boxr unpause')
     elseif gui.driver == 'cwtn' then
-        mq.cmdf('/%s pause on', mq.TLO.CWTN.Command())
-        if not isSolo() then mq.cmd('/noparse /dgge /docommand /${CWTN.Command} pause on') end
+        mq.cmdf('/%s pause %s', mq.TLO.CWTN.Command(), pause and 'on' or 'off')
     elseif gui.driver == 'rgmercs' then
-        mq.cmd('/rgl pause')
-        othersCmd('/rgl pause')
+        mq.cmd(pause and '/rgl pause' or '/rgl unpause')
     elseif gui.driver == 'kissassist' then
-        mq.cmd('/backoff on')
-        othersCmd('/backoff on')
+        mq.cmd(pause and '/backoff on' or '/backoff off')
     end
 end
 
+-- Broadcast pause/unpause to the boxes across every active family.
+local function othersCombat(pause)
+    if isSolo() then return end
+    for _, fam in ipairs(broadcastFamilies()) do
+        if fam == 'boxr' then
+            othersCmd(pause and '/boxr pause' or '/boxr unpause')
+        elseif fam == 'cwtn' then
+            mq.cmd('/noparse /dgge /docommand /${CWTN.Command} pause ' .. (pause and 'on' or 'off'))
+        elseif fam == 'rgmercs' then
+            othersCmd(pause and '/rgl pause' or '/rgl unpause')
+        elseif fam == 'kissassist' then
+            othersCmd(pause and '/backoff on' or '/backoff off')
+        end
+    end
+end
+
+local function driverPause()
+    selfCombat(true)
+    othersCombat(true)
+end
+
 local function driverUnpause()
-    if gui.driver == 'boxr' then
-        mq.cmd('/boxr unpause')
-        othersCmd('/boxr unpause')
-    elseif gui.driver == 'cwtn' then
-        mq.cmdf('/%s pause off', mq.TLO.CWTN.Command())
-        if not isSolo() then mq.cmd('/noparse /dgge /docommand /${CWTN.Command} pause off') end
-    elseif gui.driver == 'rgmercs' then
-        mq.cmd('/rgl unpause')
-        othersCmd('/rgl unpause')
-    elseif gui.driver == 'kissassist' then
-        mq.cmd('/backoff off')
-        othersCmd('/backoff off')
+    selfCombat(false)
+    othersCombat(false)
+end
+
+-- Set the boxes to chase the driver during the sweep (boxes only - the script
+-- navs the driver itself). Leaves each box's MA/assist target as its own
+-- config (per AL): CWTN mode 2 / KA chase / RGMercs chaseon follow whatever
+-- assist they're already set to. Commands from the tower's SetGroupChaseMode.
+-- CHASE-ON only: there's no consistent cross-family "stop chasing but keep
+-- fighting" (CWTN's off is mode 0 = combat OFF, unlike KA/RGMercs which just
+-- stop following), so we never broadcast an "off" - Stop pauses instead.
+local function setCrewChase()
+    if isSolo() then return end
+    for _, fam in ipairs(broadcastFamilies()) do
+        if fam == 'boxr' then
+            othersCmd('/boxr chase')
+        elseif fam == 'cwtn' then
+            mq.cmd('/noparse /dgge /docommand /${CWTN.Command} mode 2')
+        elseif fam == 'kissassist' then
+            othersCmd('/chase on')
+        elseif fam == 'rgmercs' then
+            othersCmd('/rg chaseon')
+            othersCmd('/rgl chaseon')
+        end
     end
 end
 
@@ -617,10 +690,90 @@ local function doInvites()
     gui.collectionFresh = false
 end
 
+-- Dead-box recovery. A box that dies respawns at bind (PoK) and won't return
+-- on its own - and you CAN'T /travelto an instance, so the only way back is
+-- Qeynos Hills -> Blevins -> Ready (the shared task is still in its journal
+-- after death). recoverCooldown stops a box that can't make it back from
+-- looping the sweep forever (failure-path memory).
+local recoverCooldown = {}
+local missingSince = nil
+
+-- True if some non-merc member is out of our zone instance and not on the
+-- recovery cooldown - i.e. worth pausing the sweep to bring back.
+local function hasRecoverableMember()
+    if isSolo() then return false end
+    for i = 1, (mq.TLO.Group.Members() or 0) do
+        local m = mq.TLO.Group.Member(i)
+        if m.CleanName() and not m.Mercenary() and (m.Spawn.ID() or 0) == 0 then
+            local cd = recoverCooldown[m.CleanName()]
+            if not cd or mq.gettime() > cd then return true end
+        end
+    end
+    return false
+end
+
+-- Drive one out-of-zone box back into the instance. Remote-polls the box's
+-- own Zone via DanNet (it's not in our zone, so Spawn won't see it).
+local function recoverBox(name)
+    local lower = name:lower()
+    info(name .. " is out of the instance (died?) - recovering via Blevins re-entry.")
+    setStatus("Recovering " .. name .. " - sending to Qeynos Hills...")
+    mq.cmdf('/dex %s /travelto qeytoqrg', lower)
+    if not waitFor(function()
+        return gui.requestStop
+            or (mq.TLO.Zone.ShortName() or '') ~= 'oldblackburrow_ann22raid' -- driver itself left/died
+            or (dquery(lower, 'Zone.ShortName') or ''):lower() == 'qeytoqrg'
+    end, 300000, 3000) or gui.requestStop or (mq.TLO.Zone.ShortName() or '') ~= 'oldblackburrow_ann22raid' then
+        if not gui.requestStop then warn(name .. ": recovery aborted (timeout, or the driver left the instance) - recover manually.") end
+        recoverCooldown[name] = mq.gettime() + 120000
+        return false
+    end
+    mq.delay(3000)
+
+    setStatus("Recovering " .. name .. " - re-entering at Blevins...")
+    for attempt = 1, 12 do
+        if gui.requestStop or (mq.TLO.Zone.ShortName() or '') ~= 'oldblackburrow_ann22raid' then return false end
+        mq.cmdf('/dex %s /nav spawn npc Guard Blevins', lower)
+        mq.delay(6000) -- let it path to Blevins
+        mq.cmdf('/dex %s /target npc Guard Blevins', lower)
+        mq.delay(500)
+        mq.cmdf('/dex %s /say Ready', lower)
+        if waitFor(function()
+            -- Visible to US = back in the DRIVER's instance (zone shortname
+            -- alone can't tell one instance from another).
+            return (mq.TLO.Spawn('pc =' .. name).ID() or 0) > 0
+        end, 15000, 1000) then
+            info(name .. " re-entered the instance.")
+            return true
+        end
+        setStatus(string.format("Recovering %s - re-entry attempt %d...", name, attempt))
+    end
+    warn(name .. ": could not re-enter after several tries - leaving for now (2 min cooldown), continuing short-handed.")
+    recoverCooldown[name] = mq.gettime() + 120000
+    return false
+end
+
+-- Recover every out-of-zone (non-cooldown) member, one at a time. Sweep is
+-- paused by the caller. Returns when none are left to recover.
+local function recoverMissingBoxes()
+    for i = 1, (mq.TLO.Group.Members() or 0) do
+        local m = mq.TLO.Group.Member(i)
+        if m.CleanName() and not m.Mercenary() and (m.Spawn.ID() or 0) == 0 then
+            local cd = recoverCooldown[m.CleanName()]
+            if not cd or mq.gettime() > cd then
+                if gui.requestStop then return end
+                recoverBox(m.CleanName())
+            end
+        end
+    end
+end
+
 -- Bring all grouped boxes to the driver's zone and location. Per-member:
 -- each box gets its own nav as IT arrives (3s zone-in settle), re-sent
 -- every 20s while still far. One-shot broadcast after everyone arrives
 -- left early arrivals idle and late arrivals missed it (v0.12 bug).
+-- Inside the instance you can't /travelto in - missing boxes get the
+-- Blevins re-entry instead (the broken /travelto-instance was the v0.45 bug).
 local function gatherGroup()
     if isSolo() then
         warn("not in a group - nothing to gather.")
@@ -628,6 +781,10 @@ local function gatherGroup()
     end
     local myZone = mq.TLO.Zone.ShortName() or ""
     local myName = mq.TLO.Me.CleanName()
+    if myZone == 'oldblackburrow_ann22raid' then
+        recoverMissingBoxes()
+        return
+    end
     othersCmd('/travelto %s', myZone)
 
     local arrivedAt = {}
@@ -841,8 +998,10 @@ end
 -- locs (loc order Y, X, Z) so the sweep never counts them as trash or burns a
 -- pathing attempt on them. Static spawns land on the same spot every instance.
 local PERMA_NOTRY = {
-    { y = 59.00, x = -563.00, z = -179.81 },
-    { y = 72.00, x = -553.00, z = -179.80 },
+    { y = 59.00, x = -563.00, z = -179.81 },   -- a guard (walled off)
+    { y = 72.00, x = -553.00, z = -179.80 },   -- a scout (walled off)
+    { y = -328.25, x = -831.62, z = -202.80 }, -- a scout (walled off)
+    { y = -112.00, x = -755.00, z = -203.07 }, -- a scout (walled off)
 }
 
 local function isPermaNoTry(spawn)
@@ -893,6 +1052,7 @@ end
 -- when Axtig is on the list.
 local axtigWarnAt = 0
 local skippedWarnAt = {}
+local razorgillNoted = false
 
 local function aggroedMobId()
     local bestId, bestDist = 0, 999999
@@ -908,6 +1068,17 @@ local function aggroedMobId()
                     axtigWarnAt = mq.gettime()
                     warn("AXTIG HAS AGGRO - do NOT kill him (completes mission, 2h30m lockout)! Move the group away.")
                 end
+            elseif name:find('razorgill') then
+                -- Water mobs: fighting them traps us in the water (often can't
+                -- even land a hit) and they NEVER leash in an instance, so a
+                -- school of them sits on the hate list forever. We just ignore
+                -- them - skip + move on to land targets. Announce ONCE per
+                -- session (per-id throttle = one line per fish = spam).
+                if not razorgillNoted then
+                    razorgillNoted = true
+                    info("ignoring razorgills (water mobs - they hold aggro but we never engage them).")
+                end
+                skipFor(id, 60000)
             elseif isSkipped(id) then
                 -- Mob is on xtarget but blacklisted (unreachable/timed-out).
                 -- Log once per expiry window so the user knows why we're
@@ -1280,35 +1451,53 @@ local function stateTurnIn()
     return true
 end
 
+-- Authoritative mission-complete check: the "Defeat Axtig" task objective
+-- flips to Status "Done" the instant he dies (verified in-game: "0/1" while
+-- alive, "Done" when dead; the objective only exists once he spawns). Scan
+-- by text so a shifting objective index can't break it.
+local function axtigObjectiveDone()
+    local task = mq.TLO.Task("Unity")
+    if not task() then return false end
+    for i = 1, 10 do
+        if (task.Objective(i)() or "") == "Defeat Axtig" then
+            return (task.Objective(i).Status() or "") == "Done"
+        end
+    end
+    return false
+end
+
 -- Full Quest only: kill Axtig the Uniter AFTER feathers are done. Killing
 -- him COMPLETES the mission (~2h30m lockout) - the Full Quest toggle is the
 -- consent (its tooltip warns of the lockout). Knockback is NOT mitigated per
 -- AL's config. Reuses killMobById (nav + engage + re-face + wipe/zone abort)
 -- in a guarded loop so an en-route aggro bail or short nav just retries.
+-- Returns true only when the mission is CONFIRMED complete (task objective
+-- "Defeat Axtig" = Done, or his corpse observed) - caller drops task on true.
 local function stateAxtig()
-    if not gui.fullQuest then return end -- toggled off mid-flight
+    if not gui.fullQuest then return false end -- toggled off mid-flight
     if anyoneNeedsFeather() then
         warn("Full Quest: not everyone has a Feather yet - feather ALWAYS first, NOT engaging Axtig. Holding.")
-        return
+        return false
     end
     local axtigId = mq.TLO.Spawn("npc Axtig").ID() or 0
     if axtigId == 0 then
         warn("Full Quest ON but Axtig isn't spawned (he appears after the commanders die). Holding - kill the commanders, then Start again.")
-        return
+        return false
     end
     warn("Full Quest: engaging AXTIG THE UNITER - this COMPLETES the mission (~2h30m lockout). Knockback expected (no levitate per config).")
 
     local deadline = mq.gettime() + 360000
     local axtigDied = false
     while mq.gettime() < deadline do
-        if gui.requestStop then return end
+        if gui.requestStop then return false end
         if mq.TLO.Me.Hovering() or (mq.TLO.Zone.ShortName() or '') ~= 'oldblackburrow_ann22raid' then
             warn("died or left the zone before Axtig fell - Full Quest aborted.")
-            return
+            return false
         end
+        if axtigObjectiveDone() then axtigDied = true; break end -- authoritative: mission complete
         local s = mq.TLO.Spawn(axtigId)
-        if not s() then break end                            -- despawned (NOT a confirmed kill)
-        if (s.Type() or '') == 'Corpse' then axtigDied = true; break end
+        if not s() then break end                            -- gone + objective not Done = not confirmed
+        if (s.Type() or '') == 'Corpse' then axtigDied = true; break end -- fallback signal
         -- Clear any non-Axtig aggro first (en-route trash) so we don't keep
         -- re-navving into the same mob - aggroedMobId never returns Axtig.
         local haterId = aggroedMobId()
@@ -1320,10 +1509,34 @@ local function stateAxtig()
     end
 
     if axtigDied then
-        info("AXTIG THE UNITER IS DOWN - mission COMPLETE. ~2h30m completion lockout now active; coins + rewards delivered. Drop the task / exit when ready.")
+        info("AXTIG THE UNITER IS DOWN - mission COMPLETE. ~2h30m completion lockout now active; coins + rewards delivered.")
     else
-        fail("Axtig not confirmed dead (despawn, timeout, or abort) - mission may NOT be complete. Verify in-game before assuming the lockout.")
+        fail("Axtig not confirmed dead (despawn, timeout, or abort) - mission may NOT be complete. NOT dropping the task. Verify in-game.")
     end
+    return axtigDied
+end
+
+-- Leave the instance: drop the shared task for the whole crew, then wait for
+-- the ~1-2 min auto-boot that ejects everyone to Blevins (AL: /taskquit, then
+-- wait it out). Boxes drop first so a booted driver can't miss them. Returns
+-- true once we're actually outside the instance.
+local function dropTaskAndExit()
+    info("Mission complete - dropping the shared task (whole crew). Auto-boot to Blevins in ~1-2 min.")
+    othersCmd('/taskquit') -- boxes drop their own membership (/dgge, skipped if solo)
+    mq.delay(500)
+    mq.cmd('/taskquit')    -- driver drops
+    setStatus("Mission complete - waiting for boot-out to Blevins...")
+    local bootDeadline = mq.gettime() + 240000
+    while (mq.TLO.Zone.ShortName() or '') == 'oldblackburrow_ann22raid' do
+        if gui.requestStop then return false end
+        if mq.gettime() > bootDeadline then
+            warn("still in the instance after 4 min - boot didn't fire. /taskquit may have failed; drop the task manually.")
+            return false
+        end
+        mq.delay(1000)
+    end
+    info("booted out of the instance - back near Blevins. Full Quest run complete.")
+    return true
 end
 
 -- Recon: dump unique NPC names + counts. Remove once spawn names known.
@@ -1360,7 +1573,7 @@ local function stepStateMachine()
     -- Wipe/eject check: instance states are only valid INSIDE the
     -- instance. Death respawn (PoK) or boot must reset, or the machine
     -- sticks in a state that no longer matches reality.
-    if (gui.state == 'IN_INSTANCE' or gui.state == 'SWEEPING' or gui.state == 'TURN_IN' or gui.state == 'AXTIG' or gui.state == 'HOLD')
+    if (gui.state == 'IN_INSTANCE' or gui.state == 'SWEEPING' or gui.state == 'TURN_IN' or gui.state == 'AXTIG' or gui.state == 'RECOVERING' or gui.state == 'HOLD')
         and (mq.TLO.Zone.ShortName() or '') ~= 'oldblackburrow_ann22raid' then
         warn("no longer in the instance (death or eject) - press Start to regroup and re-enter.")
         setStatus("Out of instance. Press Start to head back in.")
@@ -1376,6 +1589,13 @@ local function stepStateMachine()
             else
                 warn("no combat driver found - mission combat will need one running.")
             end
+            -- Make the whole crew active for the run: unpause every automation
+            -- family and set the boxes to chase the driver. Broadcast-all so a
+            -- mixed team (CWTN/KA/RGMercs) all responds - fixes boxes left
+            -- paused/idle at zone-in (the stranded-bard bug).
+            driverUnpause()
+            setCrewChase()
+            info("crew unpaused + set to chase the driver.")
             -- Deaths happen (knockbacks, ledges, trains). MQ2Rez owns
             -- accepting; we just make sure it's armed group-wide.
             if mq.TLO.Plugin('MQ2Rez').IsLoaded() then
@@ -1422,6 +1642,18 @@ local function stepStateMachine()
         info("starting trash sweep (commanders handled via dialogue, Axtig never)")
         gui.state = 'SWEEPING'
     elseif gui.state == 'SWEEPING' then
+        -- A member out of the instance (died -> respawned in PoK) won't return
+        -- on its own. Debounce against transient zoning, then pause to recover.
+        if hasRecoverableMember() then
+            missingSince = missingSince or mq.gettime()
+            if mq.gettime() - missingSince > 10000 then
+                missingSince = nil
+                gui.state = 'RECOVERING'
+                return
+            end
+        else
+            missingSince = nil
+        end
         -- Turn-in only with a clean hater list (Axtig included) - page 7
         -- can land while mobs are still mid-chase, and blind-navving to
         -- Ralf with live aggro is the exact pattern that caused the wipe
@@ -1453,8 +1685,20 @@ local function stepStateMachine()
             gui.state = 'HOLD'
         end
     elseif gui.state == 'AXTIG' then
-        stateAxtig()
-        gui.state = 'HOLD'
+        if stateAxtig() and dropTaskAndExit() then
+            setStatus("Full Quest COMPLETE - mission done, booted out. ~2.5h lockout active.")
+            gui.state = 'IDLE'
+        else
+            gui.state = 'HOLD' -- Axtig unconfirmed, or still inside after the drop
+        end
+    elseif gui.state == 'RECOVERING' then
+        -- Sweep paused: bring back every out-of-zone member, then resume.
+        -- A box that can't make it goes on cooldown so we don't loop.
+        setStatus("Sweep paused - recovering out-of-zone member(s)...")
+        recoverMissingBoxes()
+        driverUnpause() -- a returned box may have respawned paused; re-activate
+        setCrewChase()  -- and make sure it chases the driver again
+        if gui.state == 'RECOVERING' then gui.state = 'SWEEPING' end
     elseif gui.state == 'HOLD' then
         -- exit / re-request pipeline lands here next
     end
