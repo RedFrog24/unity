@@ -2,7 +2,10 @@
 -- Unity - 22nd Anniversary group mission (Blackburrow: Unity)
 -- Created by: RedFrog
 -- Created: June 10, 2026
--- Version 0.49 - release self-check: recovery success now verified by the box
+-- Version 0.50 - lockout message now caught: real text is "...before you can
+--   DO another task of this type", not "request another task" - pattern was
+--   never matching, so the wait time was never parsed (AL screenshot)
+-- 0.49 - release self-check: recovery success now verified by the box
 --   being VISIBLE to the driver (same instance), not just zone shortname
 -- 0.48 - razorgill log spam fixed: announce ONCE per session (was
 --   per-id 30s throttle = one line per fish; a school never leashes in an
@@ -145,7 +148,7 @@
 local mq = require('mq')
 require('ImGui')
 
-local version = "0.49"
+local version = "0.50"
 
 -- Spawn names from in-game recon 2026-06-11 (208 NPCs in fresh instance).
 -- Commanders/Axtig deliberately NOT in this set - commander pipeline handles
@@ -875,7 +878,11 @@ local function stateRequest()
     -- Sum whatever Nd/Nh/Nm/Ns components appear - the server may omit
     -- leading units ("59m:12s"), and demanding the full d:h:m:s shape
     -- would silently drop the event into the retry-and-fail branch
-    mq.event('unityLockout', "#*#you must wait #1# before you can request another task#*#", function(_, timeStr)
+    -- Real message (AL 2026-06-13): "...you must wait 0d:0h:25m:12s before you
+    -- can do another task of this type." The old pattern demanded "request
+    -- another task" (wrong word) so it never fired. Match only the stable
+    -- "you must wait <time> before" - the suffix wording varies.
+    mq.event('unityLockout', "#*#you must wait #1# before#*#", function(_, timeStr)
         local total = 0
         for n, unit in (timeStr or ''):gmatch("(%d+)([dhms])") do
             local mult = (unit == 'd' and 86400) or (unit == 'h' and 3600) or (unit == 'm' and 60) or 1
