@@ -2,7 +2,107 @@
 -- Unity - 22nd Anniversary group mission (Blackburrow: Unity)
 -- Created by: RedFrog
 -- Created: June 10, 2026
--- Version 0.50 - lockout message now caught: real text is "...before you can
+-- Version 0.79 - art consolidated into an assets/ subfolder (loader path now
+--   <scriptdir>/assets/). To run/ship: copy init.lua + the assets/ folder.
+-- 0.78 - STUCK-BOX AUTO-UNSTICK (AL data 2026-06-15): two ramp spots
+--   where chasing boxes wedge; fix = grow to size 14 via MQ2AutoSize, restore 3.
+--   runStuckCheck (1/sec, in-instance + active) detects a box parked within 8u
+--   of a spot for 5s and grows it loose (30s cooldown). Ensures MQ2AutoSize
+--   loaded on the crew at start.
+-- 0.77 - page cards (AL): removed the red "MISS" label (red outline
+--   stays); "Pg N" label now gold instead of white.
+-- 0.76 - button texture swapped to a GREY desaturated feather-swirl
+--   crop (alpha 180); header bar darkened + 70% opacity.
+-- 0.75 - tuning (AL): button texture 150; header bar 75% opacity.
+-- 0.74 - tuning (AL): button texture 255->200 (was too strong); header
+--   bar darker + slightly transparent (0.19/0.14/0.30 @ 0.82a).
+-- 0.73 - group table header row restyled (AL): purple bar
+--   (TableHeaderBg) + gold column labels, replacing the default grey.
+-- 0.72 - button texture fixed: was the EQ uiresources file not resolving
+--   + too dark to see. Replaced with a BUNDLED unity_btntex.png (sheen + grain,
+--   generated) loaded from the script dir, drawn at full alpha - now visible.
+-- 0.71 - REAL class icons from a rendered sheet: unity_classicons.png
+--   (4x4, rendered from Grimmier's full fa-solid-900.ttf via Pillow) gives the
+--   glyphs MQ's bundled font lacks - real skull (SHD), skull+crossbones (NEC),
+--   fist (MNK), wizard hat (WIZ), ninja (ROG), khanda (WAR), etc. drawClassIcon
+--   UV-crops the cell + tints purple via DrawList. Technique now in root CLAUDE.
+-- 0.70 - icon/header polish (AL): improved class icons (added MD set -
+--   security/wb_sunny/healing/pets/spa/visibility_off for better fits); Pages
+--   header is now a gold book-icon button (no arrow, matches Group); button
+--   texture opacity 38 -> 100 (was invisible).
+-- 0.69 - roster + button polish (AL): class-type icons per member
+--   (ShortName->FA glyph map, FA_USER fallback); bigger roster font (1.2x) +
+--   bigger icons to match; subtle EQ texture inside every button (uiresources
+--   background_dark.png via EverQuest.Path, alpha 38); checkmark nudged left.
+-- 0.68 - feather AS BACKGROUND + opacity (AL): swapped to AL's new
+--   feather_bg art (1024x512 2:1 opaque plate, dark swirls left / feather right)
+--   drawn full-width BEHIND the table (RowBg dropped so it shows through);
+--   WindowBg now fully opaque (no see-through); Group header icon+label gold;
+--   Full Quest checkmark nudged back left a touch.
+-- 0.67 - feather + group layout (AL): feather PNG re-keyed (dark
+--   starfield bg -> transparent + faded edges) so no more harsh rectangle line;
+--   Group header is now a people-icon button (FA_USERS, no dropdown arrow);
+--   each member/merc row gets a purple FA_USER avatar in a new lead column;
+--   roomier rows (CellPadding) using the taller window; checkmark nudged right.
+-- 0.66 - group panel reworked (AL): the ugly table-width cut is gone -
+--   the table now SHRINK-WRAPS to its columns (SizingFixedFit + NoHostExtendX)
+--   and ends right after Pages; the feather fills the right in a TALLER region
+--   (min 230px -> longer window) at full vibrancy (alpha 100 -> 230). Checkmark
+--   nudged up.
+-- 0.65 - group table given an explicit outer width that ENDS before the
+--   feather (rows/borders no longer run across the feather graphic); Full Quest
+--   checkmark nudged right.
+-- 0.64 - header calibration round 3 (AL): buttons now equal-width,
+--   taller (28), filling the row edge-to-edge; status line + dot nudged down +
+--   right; Full Quest checkmark nudged up + right.
+-- 0.63 - header calibration round 2 (AL): status now two-tone (gold
+--   [STATE] + WHITE message); status dot vertically centered on the text via
+--   CalcTextSize; Full Quest checkmark recolored PURPLE + re-centered; buttons
+--   nudged down (plateH*0.86) to clear the plate's bottom gold border.
+-- 0.62 - header calibration (AL in-game feedback): version tucked under
+--   "TY"; close X nudged up; content pulled up to kill the blank gap (buttons
+--   sit over the plate's lower edge); status line now GOLD + faux-bold (drawn
+--   twice, 1px offset) via DrawList AddText; Full Quest check realigned onto the
+--   baked box so it actually toggles.
+-- 0.61 - BAKED HEADER PLATE: unity_header.png (bird + UNITY + ornate
+--   gold frame + texture, AL's concept art) becomes the title bar (NoTitleBar);
+--   live bits ride on top - version, state-colored dot + status line, clickable
+--   Full Quest check (in the baked box), custom close X. Graceful fallback to
+--   the v0.60 phoenix+title layout when the plate is absent.
+-- 0.60 - card + button polish (AL batch): buttons now gold (glyphs +
+--   labels); page cards cleaned up - HELD cards lose the green outline AND the
+--   "HELD" label (the found-scroll art conveys it), MISSING cards keep the red
+--   outline + "MISS" so what's needed stands out.
+-- 0.59 - gold serif "UNITY" title wordmark (unity_title.png, cropped
+--   + alpha-keyed from concept_01) drawn next to the phoenix; version stays
+--   live text beside it (MQ Lua can't load a custom TTF, so the title is art).
+-- 0.58 - window + chrome pass toward the concept: wider fixed width
+--   (520) with auto-fit height (no more long half-empty window); rounded
+--   corners + thin gold frame borders (theme style vars); buttons now have
+--   FontAwesome icons (play/pause/stop/refresh/users). Feather reverted to its
+--   native 1:2 aspect (distorting it looked bad); single alpha knob.
+-- 0.57 - feather resized wider+shorter via knobs (REVERTED in 0.58 - distorted).
+-- 0.56 - feather backdrop wired: unity_feather.png drawn behind the
+--   group table (right-anchored, keeps 1:2 aspect so no squash, RowBg dropped
+--   so it shows through, clipped to the panel). First pass - tune alpha/size
+--   in-game.
+-- 0.55 - real art wired: phoenix emblem at the title + two painted
+--   scroll states on the page cards (found scroll = HELD, sealed "?" scroll =
+--   MISSING), all cropped from AL's concept art. Feather backdrop still a hook
+--   (needs in-game height tuning - tall feather vs compact table).
+-- 0.54 - art-slot scaffold: lazy getArt() loader (CreateTexture +
+--   cache-false-on-miss, PetGear technique). Phoenix emblem wired at the
+--   title, parchment wired behind page cards - both graceful no-ops until
+--   the PNGs are dropped in. Feather backdrop left as a documented hook.
+-- 0.53 - merc row no longer dimmed (reads as "unavailable"); now
+--   styled like every other member row, just tagged "merc"
+-- 0.52 - GUI pass 2 (AL feedback): zone cell hover-tooltip shows the
+--   full name (column clips); mercs now listed as dimmed display-only rows;
+--   page cards auto-size to window width so all 7 fit
+-- 0.51 - GUI redesign FIRST PASS: purple/gold theme, no-resize window,
+--   gold title, BeginTable group panel (long zone name now, gating still uses
+--   ShortName), page cards (HELD/MISS). Structure-only; art assets layer later.
+-- 0.50 - lockout message now caught: real text is "...before you can
 --   DO another task of this type", not "request another task" - pattern was
 --   never matching, so the wait time was never parsed (AL screenshot)
 -- 0.49 - release self-check: recovery success now verified by the box
@@ -147,8 +247,9 @@
 
 local mq = require('mq')
 require('ImGui')
+local Icons = require('mq.ICONS')
 
-local version = "0.50"
+local version = "0.79"
 
 -- Spawn names from in-game recon 2026-06-11 (208 NPCs in fresh instance).
 -- Commanders/Axtig deliberately NOT in this set - commander pipeline handles
@@ -206,6 +307,8 @@ local gui = {
     members = {},      -- group cache: {name, lvl, cls, zone, feather, pageCount}
     pages = {},        -- [1..7] = {holders = "names" or nil, extra = bool}
     covered = 0,
+    groupOpen = true,  -- custom Group header (people-icon button, no arrow)
+    pagesOpen = true,  -- custom Pages header (book-icon button, no arrow)
     collectionFresh = false,
     lockoutUntil = 0,  -- mq.gettime() when next request allowed (0 = unknown)
     killCount = 0,
@@ -385,7 +488,7 @@ local function refreshPeers()
         setStatus(string.format("Querying online characters... %d/%d (%s)", i, #peers, p.charName))
         p.cls = dquery(p.peer, 'Me.Class.ShortName') or "?"
         p.lvl = dquery(p.peer, 'Me.Level') or "?"
-        p.zone = dquery(p.peer, 'Zone.ShortName') or "?"
+        p.zone = dquery(p.peer, 'Zone.Name') or "?" -- long/normal name for display (gating uses ShortName)
         p.include = false -- user picks who joins
     end
     gui.peers = peers
@@ -408,17 +511,21 @@ local function refreshCollection()
         name = mq.TLO.Me.CleanName(),
         lvl = mq.TLO.Me.Level() or 0,
         cls = mq.TLO.Me.Class.ShortName() or "?",
-        zone = mq.TLO.Zone.ShortName() or "?",
+        zone = mq.TLO.Zone.Name() or "?", -- long/normal name for display (gating uses ShortName)
         feather = (mq.TLO.FindItemCount("=Unified Phoenix Feather")() or 0) > 0,
         counts = myCounts,
         pageCount = 0,
     }
 
     -- Boxes: lvl/cls/zone from instant local Group TLOs (no DanNet);
-    -- whole collection in one decoded round-trip each
+    -- whole collection in one decoded round-trip each. Mercs are display-only
+    -- (gui.mercs) - never queried/commanded, never in the members logic list.
+    local mercs = {}
     for gi = 1, (mq.TLO.Group.Members() or 0) do
         local gm = mq.TLO.Group.Member(gi)
-        if gm.CleanName() and not gm.Mercenary() then
+        if gm.CleanName() and gm.Mercenary() then
+            mercs[#mercs + 1] = { name = gm.CleanName(), lvl = gm.Level() or "?", cls = gm.Class.ShortName() or "?" }
+        elseif gm.CleanName() then
             local name = gm.CleanName()
             setStatus("Checking " .. name .. "...")
             local feather, counts = decodeCollection(dqueryNoparse(name:lower(), query))
@@ -432,8 +539,8 @@ local function refreshCollection()
                 -- Spawn visible = same zone instance as me (better than a
                 -- ShortName match, which can't tell instances apart). Only
                 -- pay a dquery for the actual zone when they're NOT with me.
-                zone = (gm.Spawn.ID() or 0) > 0 and (mq.TLO.Zone.ShortName() or "?")
-                    or (dquery(name:lower(), 'Zone.ShortName') or "elsewhere"),
+                zone = (gm.Spawn.ID() or 0) > 0 and (mq.TLO.Zone.Name() or "?")
+                    or (dquery(name:lower(), 'Zone.Name') or "elsewhere"),
                 feather = feather,         -- nil = unknown (query failed)
                 counts = counts,           -- nil = unknown
                 unknown = (counts == nil),
@@ -441,6 +548,7 @@ local function refreshCollection()
             }
         end
     end
+    gui.mercs = mercs
 
     for _, m in ipairs(members) do
         if m.feather and not featherAnnounced[m.name] then
@@ -766,6 +874,64 @@ local function recoverMissingBoxes()
             if not cd or mq.gettime() > cd then
                 if gui.requestStop then return end
                 recoverBox(m.CleanName())
+            end
+        end
+    end
+end
+
+-- Ramp STUCK-SPOTS: two stair-element spots where chasing boxes wedge (captured
+-- AL 2026-06-15, loc order Y, X, Z). Fix CONFIRMED in-game: momentarily GROW the
+-- box to size 14 via MQ2AutoSize, then restore (the old "client-side resize won't
+-- help" belief was wrong). sizeself is a PERSISTENT setting, so we set it back.
+local STUCK_SPOTS = {
+    { y = 311.37, x = 72.63, z = -130.27 },
+    { y = 294.45, x = 27.50, z = -154.24 },
+}
+local STUCK_RADIUS = 8        -- within this of a spot = candidate
+local STUCK_MS = 5000         -- not moving this long near a spot = stuck
+local UNSTICK_SIZE = 14       -- AL: size 14 pops it loose
+local NORMAL_SIZE = 3         -- their MQ2AutoSize SizeSelf (restore target)
+local stuckTrack = {}         -- name -> { y, x, z, since }
+local unstickCD = {}          -- name -> cooldown gettime
+
+local function nearStuckSpot(y, x, z)
+    for _, s in ipairs(STUCK_SPOTS) do
+        if math.abs(y - s.y) < STUCK_RADIUS and math.abs(x - s.x) < STUCK_RADIUS and math.abs(z - s.z) < STUCK_RADIUS then
+            return true
+        end
+    end
+    return false
+end
+
+local function unstickBox(name)
+    info(name .. " wedged on the ramp - growing to size " .. UNSTICK_SIZE .. " to pop loose")
+    setStatus(name .. " stuck on the ramp - unsticking...")
+    mq.cmdf('/dex %s /autosize sizeself %d', name, UNSTICK_SIZE)
+    mq.delay(2500)
+    mq.cmdf('/dex %s /autosize sizeself %d', name, NORMAL_SIZE)
+    unstickCD[name] = mq.gettime() + 30000 -- 30s per-box cooldown (anti-loop)
+end
+
+-- Scan grouped boxes (not self/mercs): if one sits within STUCK_RADIUS of a spot
+-- and hasn't moved for STUCK_MS while the driver pulls away, grow it loose.
+local function runStuckCheck()
+    for i = 1, (mq.TLO.Group.Members() or 0) do
+        local m = mq.TLO.Group.Member(i)
+        local name = m.CleanName()
+        if name and not m.Mercenary() and (m.Spawn.ID() or 0) > 0 then
+            local y, x, z = m.Spawn.Y() or 0, m.Spawn.X() or 0, m.Spawn.Z() or 0
+            if nearStuckSpot(y, x, z) and (not unstickCD[name] or mq.gettime() > unstickCD[name]) then
+                local t = stuckTrack[name]
+                if t and math.abs(y - t.y) < 2 and math.abs(x - t.x) < 2 and math.abs(z - t.z) < 2 then
+                    if mq.gettime() - t.since > STUCK_MS then
+                        unstickBox(name)
+                        stuckTrack[name] = nil
+                    end
+                else
+                    stuckTrack[name] = { y = y, x = x, z = z, since = mq.gettime() }
+                end
+            else
+                stuckTrack[name] = nil -- moved off the spot, or not near one
             end
         end
     end
@@ -1719,59 +1885,344 @@ local stateColors = {
     AXTIG = { 1.0, 0.3, 0.3, 1 }, -- danger: mission-completing kill in progress
 }
 
-local function drawGUI()
-    if not gui.open then return end
-    local shouldDraw
-    gui.open, shouldDraw = ImGui.Begin('Unity##UnityGUI', gui.open)
-    if not shouldDraw then
-        ImGui.End()
+-- Art assets (v0.54 redesign - the showpiece layer). Textures load lazily
+-- from the script's own folder and cache a `false` sentinel on miss, so a
+-- missing PNG is a one-time no-op, never a per-frame CreateTexture retry.
+-- Every draw site guards on a non-nil return, so the pure-ImGui look is
+-- identical until the art is dropped in. PetGear technique: mq.CreateTexture
+-- + GetTextureID. Art lives in the `assets/` subfolder next to init.lua - to
+-- run/ship, copy init.lua AND the assets/ folder to the MQ lua/unity folder.
+local artDir = (debug.getinfo(1, 'S').source:sub(2):match('(.*[/\\])') or '') .. 'assets' .. package.config:sub(1, 1)
+local ART_FILES = {
+    header        = 'unity_header.png',         -- full baked header plate (bird+UNITY+frame+texture)
+    phoenix       = 'unity_phoenix.png',        -- emblem by the title (fallback when no header plate)
+    title         = 'unity_title.png',          -- gold serif "UNITY" wordmark (fallback)
+    feather       = 'unity_feather.png',        -- glow-baked backdrop behind the group panel
+    scrollFound   = 'unity_scroll_found.png',   -- page-card art when the page is HELD
+    scrollMissing = 'unity_scroll_missing.png', -- page-card art when the page is MISSING
+    classIcons    = 'unity_classicons.png',     -- 4x4 class-icon sheet (rendered from full FA solid)
+    btnTex        = 'unity_btntex.png',          -- sheen + grain overlay for buttons
+}
+local artCache = {}
+
+-- Returns the texture for an art slot, or nil if the file is absent / the
+-- binding lacks CreateTexture. Caches false on failure (one attempt only).
+local function getArt(key)
+    if artCache[key] ~= nil then return artCache[key] or nil end
+    local fname = ART_FILES[key]
+    if not fname or not mq.CreateTexture then
+        artCache[key] = false
+        return nil
+    end
+    local tex = mq.CreateTexture(artDir .. fname)
+    if tex and tex.GetTextureID and tex:GetTextureID() then
+        artCache[key] = tex
+        return tex
+    end
+    artCache[key] = false
+    return nil
+end
+
+-- Overlay our bundled button texture (sheen + grain) over the LAST-drawn item
+-- (a button) for a tactile, glassy look. Lower alpha = subtler.
+local function textureLastItem(alpha)
+    local tex = getArt('btnTex')
+    if not tex then return end
+    local minx, miny = ImGui.GetItemRectMin()
+    local maxx, maxy = ImGui.GetItemRectMax()
+    ImGui.GetWindowDrawList():AddImage(tex:GetTextureID(), ImVec2(minx, miny), ImVec2(maxx, maxy),
+        ImVec2(0, 0), ImVec2(1, 1), IM_COL32(255, 255, 255, alpha))
+end
+
+-- Class ShortName -> cell index in unity_classicons.png (a 4x4 sheet rendered
+-- from the FULL FontAwesome solid set, so we get real skull/swords/fist/etc.
+-- that MQ's bundled font lacks). drawClassIcon UV-crops the cell + tints purple.
+-- Cell order: WAR CLR PAL RNG / SHD DRU MNK BRD / ROG SHM NEC WIZ / MAG ENC BST BER
+local CLASS_INDEX = {
+    WAR = 0, CLR = 1, PAL = 2, RNG = 3, SHD = 4, DRU = 5, MNK = 6, BRD = 7,
+    ROG = 8, SHM = 9, NEC = 10, WIZ = 11, MAG = 12, ENC = 13, BST = 14, BER = 15,
+}
+local function drawClassIcon(cls, size)
+    local tex = getArt('classIcons')
+    local idx = CLASS_INDEX[(cls or ""):upper()]
+    if not tex or not idx then -- fallback to the built-in person glyph
+        ImGui.PushStyleColor(ImGuiCol.Text, 0.66, 0.44, 0.91, 1); ImGui.Text(Icons.FA_USER); ImGui.PopStyleColor()
         return
     end
+    local col, row = idx % 4, math.floor(idx / 4)
+    local cx, cy = ImGui.GetCursorScreenPos()
+    ImGui.GetWindowDrawList():AddImage(tex:GetTextureID(), ImVec2(cx, cy), ImVec2(cx + size, cy + size),
+        ImVec2(col / 4, row / 4), ImVec2((col + 1) / 4, (row + 1) / 4), IM_COL32(173, 130, 235, 255))
+    ImGui.Dummy(size, size)
+end
 
-    -- Title row: Full Quest toggle
-    ImGui.Text("Unity v" .. version)
-    ImGui.SameLine(ImGui.GetWindowWidth() - 150)
-    if gui.state == 'SWEEPING' then
-        ImGui.BeginDisabled()
-        ImGui.Checkbox("Full Quest", gui.fullQuest)
-        ImGui.EndDisabled()
-    else
-        gui.fullQuest = ImGui.Checkbox("Full Quest", gui.fullQuest)
-    end
+-- Purple/gold "phoenix" theme (v0.51 redesign, first pass). Pushed before
+-- Begin so it skins the window chrome too; the caller pops the same count.
+local function pushUnityTheme()
+    ImGui.PushStyleColor(ImGuiCol.WindowBg, 0.07, 0.055, 0.11, 1)
+    ImGui.PushStyleColor(ImGuiCol.TitleBg, 0.10, 0.08, 0.16, 1)
+    ImGui.PushStyleColor(ImGuiCol.TitleBgActive, 0.15, 0.11, 0.24, 1)
+    ImGui.PushStyleColor(ImGuiCol.Border, 0.72, 0.57, 0.25, 0.85)
+    ImGui.PushStyleColor(ImGuiCol.Text, 0.86, 0.83, 0.93, 1)
+    ImGui.PushStyleColor(ImGuiCol.Button, 0.24, 0.18, 0.40, 0.9)
+    ImGui.PushStyleColor(ImGuiCol.ButtonHovered, 0.42, 0.31, 0.66, 1)
+    ImGui.PushStyleColor(ImGuiCol.ButtonActive, 0.52, 0.40, 0.78, 1)
+    ImGui.PushStyleColor(ImGuiCol.FrameBg, 0.13, 0.10, 0.21, 1)
+    ImGui.PushStyleColor(ImGuiCol.FrameBgHovered, 0.21, 0.16, 0.34, 1)
+    ImGui.PushStyleColor(ImGuiCol.FrameBgActive, 0.28, 0.21, 0.44, 1)
+    ImGui.PushStyleColor(ImGuiCol.Header, 0.26, 0.20, 0.42, 0.55)
+    ImGui.PushStyleColor(ImGuiCol.HeaderHovered, 0.34, 0.26, 0.54, 0.8)
+    ImGui.PushStyleColor(ImGuiCol.HeaderActive, 0.40, 0.30, 0.62, 1)
+    ImGui.PushStyleColor(ImGuiCol.CheckMark, 0.85, 0.70, 0.32, 1)
+    ImGui.PushStyleColor(ImGuiCol.Separator, 0.50, 0.40, 0.22, 0.5)
+    -- Rounded chrome (Grimmier/magegear style) + thin gold frame borders.
+    ImGui.PushStyleVar(ImGuiStyleVar.WindowRounding, 9)
+    ImGui.PushStyleVar(ImGuiStyleVar.ChildRounding, 6)
+    ImGui.PushStyleVar(ImGuiStyleVar.FrameRounding, 5)
+    ImGui.PushStyleVar(ImGuiStyleVar.PopupRounding, 5)
+    ImGui.PushStyleVar(ImGuiStyleVar.GrabRounding, 4)
+    ImGui.PushStyleVar(ImGuiStyleVar.FrameBorderSize, 1)
+    return 16, 6 -- color count, style-var count (caller pops both, incl. early return)
+end
+
+-- Header plate: one baked PNG (bird + UNITY + ornate gold frame + texture) used
+-- as the window's title bar (window gets NoTitleBar when this art is present).
+-- The DYNAMIC bits ride on top, positioned as fractions of the plate's rect -
+-- nudge the *Frac numbers against the real art. Advances the cursor below it.
+-- PNG is a 1024x512 canvas with the plate in the top 358px (transparent below).
+local function drawHeaderPlate(header)
+    local wx, wy = ImGui.GetWindowPos()
+    local winW = ImGui.GetWindowWidth()
+    local imgH = winW * 0.5          -- 1024x512 canvas drawn edge-to-edge
+    local plateH = imgH * 0.70       -- the plate occupies the top ~70% of the canvas
+    local dl = ImGui.GetWindowDrawList()
+    dl:AddImageRounded(header:GetTextureID(), ImVec2(wx, wy), ImVec2(wx + winW, wy + imgH),
+        ImVec2(0, 0), ImVec2(1, 1), IM_COL32(255, 255, 255, 255), 9,
+        ImDrawFlags and ImDrawFlags.RoundCornersTop or 0)
+
+    -- live version, tucked under the "TY" of the baked UNITY
+    ImGui.SetCursorPos(winW * 0.34, plateH * 0.50)
+    ImGui.PushStyleColor(ImGuiCol.Text, 0.90, 0.76, 0.36, 1)
+    ImGui.Text("v" .. version)
+    ImGui.PopStyleColor()
+
+    -- status: state-colored dot + GOLD [STATE] tag + WHITE message, faux-bold
+    -- (no real bold font in MQ, so draw each twice with a 1px offset to thicken)
+    local c = stateColors[gui.state] or { 0.4, 1.0, 0.4, 1 }
+    local sx, sy = wx + winW * 0.11, wy + plateH * 0.68
+    local stateTag = string.format("[%s]%s", gui.state, gui.paused and " PAUSED" or "")
+    local msg = " " .. gui.status
+    local tagW, textH = ImGui.CalcTextSize(stateTag)
+    local gold = IM_COL32(232, 196, 104, 255)
+    local white = IM_COL32(238, 236, 245, 255)
+    dl:AddCircleFilled(ImVec2(wx + winW * 0.078, sy + textH * 0.5), 5,
+        IM_COL32(math.floor(c[1] * 255), math.floor(c[2] * 255), math.floor(c[3] * 255), 255))
+    dl:AddText(ImVec2(sx, sy), gold, stateTag)
+    dl:AddText(ImVec2(sx + 1, sy), gold, stateTag)
+    dl:AddText(ImVec2(sx + tagW, sy), white, msg)
+    dl:AddText(ImVec2(sx + tagW + 1, sy), white, msg)
+
+    -- Full Quest: clickable check inside the BAKED box (no ImGui frame = no double box)
+    local boxSize = plateH * 0.16
+    ImGui.SetCursorPos(winW * 0.70, plateH * 0.27)
+    local fqx, fqy = ImGui.GetCursorScreenPos()
+    ImGui.InvisibleButton("##fqtoggle", boxSize, boxSize)
     if ImGui.IsItemHovered() then
         ImGui.SetTooltip("ON: kill Axtig after feathers (mission complete, 2h30m lockout)\nOFF: feathers only - never engage Axtig")
     end
+    if ImGui.IsItemClicked() and gui.state ~= 'SWEEPING' then gui.fullQuest = not gui.fullQuest end
+    if gui.fullQuest then
+        local purple = IM_COL32(168, 112, 232, 255)
+        dl:AddLine(ImVec2(fqx + boxSize * 0.40, fqy + boxSize * 0.42), ImVec2(fqx + boxSize * 0.60, fqy + boxSize * 0.62), purple, 3)
+        dl:AddLine(ImVec2(fqx + boxSize * 0.60, fqy + boxSize * 0.62), ImVec2(fqx + boxSize * 0.94, fqy + boxSize * 0.20), purple, 3)
+    end
 
-    -- Status line
-    local c = stateColors[gui.state] or { 0.4, 1.0, 0.4, 1 }
-    ImGui.PushStyleColor(ImGuiCol.Text, c[1], c[2], c[3], c[4])
-    ImGui.TextWrapped(string.format("[%s]%s %s", gui.state, gui.paused and " PAUSED" or "", gui.status))
-    ImGui.PopStyleColor()
-    ImGui.Separator()
+    -- close (X) top-right
+    ImGui.SetCursorPos(winW - 32, plateH * 0.02)
+    local xx, xy = ImGui.GetCursorScreenPos()
+    ImGui.InvisibleButton("##close", 18, 18)
+    if ImGui.IsItemClicked() then gui.open = false end
+    local xcol = ImGui.IsItemHovered() and IM_COL32(255, 225, 150, 255) or IM_COL32(190, 160, 90, 255)
+    dl:AddLine(ImVec2(xx + 4, xy + 4), ImVec2(xx + 14, xy + 14), xcol, 2)
+    dl:AddLine(ImVec2(xx + 14, xy + 4), ImVec2(xx + 4, xy + 14), xcol, 2)
+
+    -- continue content just under the visible frame (tuned so the buttons clear
+    -- the plate's bottom gold border without leaving a blank gap)
+    ImGui.SetCursorPos(8, plateH * 0.86)
+end
+
+local function drawGUI()
+    if not gui.open then return end
+    local themeColors, themeVars = pushUnityTheme()
+    -- Lock the width (wider, closer to the concept) and let height auto-fit the
+    -- content, so the window is never a long half-empty box.
+    ImGui.SetNextWindowSizeConstraints(520, 0, 520, 4000)
+    -- When the baked header plate exists it BECOMES the title bar (NoTitleBar);
+    -- otherwise keep the native title bar (+ its close X) for the text fallback.
+    local header = getArt('header')
+    local winFlags = header and bit32.bor(ImGuiWindowFlags.AlwaysAutoResize, ImGuiWindowFlags.NoTitleBar)
+        or ImGuiWindowFlags.AlwaysAutoResize
+    local shouldDraw
+    gui.open, shouldDraw = ImGui.Begin('Unity##UnityGUI', gui.open, winFlags)
+    if not shouldDraw then
+        ImGui.End()
+        ImGui.PopStyleColor(themeColors)
+        ImGui.PopStyleVar(themeVars)
+        return
+    end
+
+    if header then
+        drawHeaderPlate(header)
+    else
+        -- Fallback (no plate): phoenix emblem + gold "UNITY" wordmark + version + Full Quest
+        local phoenix = getArt('phoenix')
+        if phoenix then
+            ImGui.Image(phoenix:GetTextureID(), ImVec2(30, 30))
+            ImGui.SameLine(0, 8)
+        end
+        local titleArt = getArt('title')
+        ImGui.PushStyleColor(ImGuiCol.Text, 0.90, 0.76, 0.36, 1)
+        if titleArt then
+            ImGui.Image(titleArt:GetTextureID(), ImVec2(120, 30)) -- 256x64 wordmark, 4:1
+            ImGui.SameLine(0, 8)
+            ImGui.AlignTextToFramePadding()
+            ImGui.Text("v" .. version)
+        else
+            ImGui.AlignTextToFramePadding()
+            ImGui.Text("UNITY v" .. version)
+        end
+        ImGui.PopStyleColor()
+        ImGui.SameLine(ImGui.GetWindowWidth() - 150)
+        if gui.state == 'SWEEPING' then
+            ImGui.BeginDisabled()
+            ImGui.Checkbox("Full Quest", gui.fullQuest)
+            ImGui.EndDisabled()
+        else
+            gui.fullQuest = ImGui.Checkbox("Full Quest", gui.fullQuest)
+        end
+        if ImGui.IsItemHovered() then
+            ImGui.SetTooltip("ON: kill Axtig after feathers (mission complete, 2h30m lockout)\nOFF: feathers only - never engage Axtig")
+        end
+        local c = stateColors[gui.state] or { 0.4, 1.0, 0.4, 1 }
+        ImGui.PushStyleColor(ImGuiCol.Text, c[1], c[2], c[3], c[4])
+        ImGui.TextWrapped(string.format("[%s]%s %s", gui.state, gui.paused and " PAUSED" or "", gui.status))
+        ImGui.PopStyleColor()
+        ImGui.Separator()
+    end
 
     -- Buttons (set flags only)
-    if ImGui.Button("Start") then gui.requestStart = true end
-    ImGui.SameLine()
-    if ImGui.Button(gui.paused and "Resume" or "Pause") then gui.requestPauseToggle = true end
-    ImGui.SameLine()
-    if ImGui.Button("Stop") then gui.requestStop = true end
-    ImGui.SameLine()
-    if ImGui.Button("Refresh") then gui.requestRefresh = true end
-    ImGui.SameLine()
-    if ImGui.Button("Gather Group") then gui.requestGather = true end
+    ImGui.PushStyleColor(ImGuiCol.Text, 0.90, 0.76, 0.36, 1) -- gold button glyphs + labels
+    local btnGap = 5
+    local btnW = (ImGui.GetContentRegionAvail() - btnGap * 4) / 5 -- 5 equal buttons fill the row
+    local btnH = 28
+    if ImGui.Button(Icons.FA_PLAY .. "  Start", btnW, btnH) then gui.requestStart = true end
+    textureLastItem(180)
+    ImGui.SameLine(0, btnGap)
+    if ImGui.Button((gui.paused and Icons.FA_PLAY or Icons.FA_PAUSE) .. "  " .. (gui.paused and "Resume" or "Pause"), btnW, btnH) then gui.requestPauseToggle = true end
+    textureLastItem(180)
+    ImGui.SameLine(0, btnGap)
+    if ImGui.Button(Icons.FA_STOP .. "  Stop", btnW, btnH) then gui.requestStop = true end
+    textureLastItem(180)
+    ImGui.SameLine(0, btnGap)
+    if ImGui.Button(Icons.FA_REFRESH .. "  Refresh", btnW, btnH) then gui.requestRefresh = true end
+    textureLastItem(180)
+    ImGui.SameLine(0, btnGap)
+    if ImGui.Button(Icons.FA_USERS .. "  Gather", btnW, btnH) then gui.requestGather = true end
+    textureLastItem(180)
+    ImGui.PopStyleColor()
     if ImGui.IsItemHovered() then
         ImGui.SetTooltip("All grouped boxes /travelto your zone, then nav to you.\nUse after grouping so everyone enters together on Start.")
     end
     ImGui.Separator()
 
-    -- Group panel
-    if ImGui.CollapsingHeader(string.format("Group (%d/6)###grouphdr", #gui.members), ImGuiTreeNodeFlags.DefaultOpen) then
-        for _, m in ipairs(gui.members) do
-            ImGui.Text(string.format("  %-12s %3s %-4s %-14s %s  pages: %s",
-                m.name, tostring(m.lvl), tostring(m.cls), tostring(m.zone),
-                m.unknown and "   ?   " or (m.feather and "FEATHER" or "       "),
-                m.unknown and "?" or tostring(m.pageCount)))
+    -- Group panel (table)
+    -- ART HOOK (feather): unity_feather.png (256x512, dark glow baked in) goes
+    -- BEHIND this table. Drawn FIRST on the window draw list so the table text
+    -- renders on top; RowBg dropped (only when the feather exists) so the rows
+    -- are transparent and it shows through. The feather keeps its 1:2 aspect
+    -- (anchored right, height = estimated panel height) so it never squashes -
+    -- it just scales down to a narrow strip on the right, like the concept.
+    -- Group header: full-width button styled as a header bar - people icon, NO
+    -- dropdown arrow (concept style). Toggles gui.groupOpen.
+    ImGui.PushStyleVar(ImGuiStyleVar.ButtonTextAlign, 0.02, 0.5)
+    ImGui.PushStyleColor(ImGuiCol.Text, 0.90, 0.76, 0.36, 1) -- gold icon + label
+    if ImGui.Button(string.format("%s  Group (%d/6)###grouphdr", Icons.FA_USERS, #gui.members), ImGui.GetContentRegionAvail(), 0) then
+        gui.groupOpen = not gui.groupOpen
+    end
+    textureLastItem(180)
+    ImGui.PopStyleColor()
+    ImGui.PopStyleVar()
+    if gui.groupOpen then
+        local feather = #gui.members > 0 and getArt('feather')
+        local availW = ImGui.GetContentRegionAvail()
+        -- *1.25 + pad estimates the table height with the bigger row font below.
+        local rowsH = ((#gui.members + #(gui.mercs or {})) + 1.5) * ImGui.GetTextLineHeightWithSpacing() * 1.25 + 16
+        -- feather_bg is a 2:1 opaque plate (dark swirls left, feather right) drawn
+        -- full-width BEHIND the table - at least its native height so the whole
+        -- feather shows; the table shrink-wraps over the dark-left.
+        local regionH = feather and math.max(rowsH, availW * 0.5) or rowsH
+        local panelTopY = ImGui.GetCursorPosY()
+        if feather then
+            local fx, fy = ImGui.GetCursorScreenPos()
+            ImGui.GetWindowDrawList():AddImage(feather:GetTextureID(), ImVec2(fx, fy), ImVec2(fx + availW, fy + regionH),
+                ImVec2(0, 0), ImVec2(1, 1), IM_COL32(255, 255, 255, 255)) -- opaque background
         end
+        -- drop RowBg when the bg image is shown so the texture shows through the rows
+        local tblFlags = feather and ImGuiTableFlags.BordersInnerH
+            or bit32.bor(ImGuiTableFlags.RowBg, ImGuiTableFlags.BordersInnerH)
+        if feather then -- shrink-wrap so the table ends right after the Pages column
+            tblFlags = bit32.bor(tblFlags, ImGuiTableFlags.SizingFixedFit, ImGuiTableFlags.NoHostExtendX)
+        end
+        ImGui.PushFont(ImGui.GetFont(), ImGui.GetFontSize() * 1.2) -- bigger roster text + icons
+        ImGui.PushStyleVar(ImGuiStyleVar.CellPadding, 4, 5) -- roomier rows (concept style)
+        ImGui.PushStyleColor(ImGuiCol.TableHeaderBg, 0.16, 0.12, 0.26, 0.70) -- purple header bar (darker, slightly transparent)
+        if #gui.members > 0 and ImGui.BeginTable("##grouptbl", 7, tblFlags) then
+            ImGui.TableSetupColumn("##av")
+            ImGui.TableSetupColumn("Name")
+            ImGui.TableSetupColumn("Lv")
+            ImGui.TableSetupColumn("Cls")
+            ImGui.TableSetupColumn("Zone")
+            ImGui.TableSetupColumn("Feather")
+            ImGui.TableSetupColumn("Pages")
+            ImGui.PushStyleColor(ImGuiCol.Text, 0.90, 0.76, 0.36, 1) -- gold header labels
+            ImGui.TableHeadersRow()
+            ImGui.PopStyleColor()
+            for _, m in ipairs(gui.members) do
+                ImGui.TableNextRow()
+                ImGui.TableNextColumn(); drawClassIcon(m.cls, 20)
+                ImGui.TableNextColumn(); ImGui.Text(tostring(m.name))
+                ImGui.TableNextColumn(); ImGui.Text(tostring(m.lvl))
+                ImGui.TableNextColumn(); ImGui.Text(tostring(m.cls))
+                ImGui.TableNextColumn(); ImGui.Text(tostring(m.zone))
+                if ImGui.IsItemHovered() then ImGui.SetTooltip(tostring(m.zone)) end -- full name (column clips)
+                ImGui.TableNextColumn()
+                if m.unknown then
+                    ImGui.TextDisabled("?")
+                elseif m.feather then
+                    ImGui.PushStyleColor(ImGuiCol.Text, 0.45, 0.95, 0.5, 1); ImGui.Text("Yes"); ImGui.PopStyleColor()
+                else
+                    ImGui.PushStyleColor(ImGuiCol.Text, 0.95, 0.45, 0.45, 1); ImGui.Text("No"); ImGui.PopStyleColor()
+                end
+                ImGui.TableNextColumn(); ImGui.Text(m.unknown and "?" or tostring(m.pageCount))
+            end -- (avatar cell prepended at the top of each row)
+            -- Mercs: display-only rows so the roster matches the slot count;
+            -- never queried, so no feather/pages. Styled like everyone else
+            -- (NOT dimmed - dimming reads as "unavailable", which it isn't).
+            for _, mc in ipairs(gui.mercs or {}) do
+                ImGui.TableNextRow()
+                ImGui.TableNextColumn(); drawClassIcon(mc.cls, 20)
+                ImGui.TableNextColumn(); ImGui.Text(tostring(mc.name))
+                ImGui.TableNextColumn(); ImGui.Text(tostring(mc.lvl))
+                ImGui.TableNextColumn(); ImGui.Text(tostring(mc.cls))
+                ImGui.TableNextColumn(); ImGui.Text("merc")
+                ImGui.TableNextColumn(); ImGui.Text("-")
+                ImGui.TableNextColumn(); ImGui.Text("-")
+            end
+            ImGui.EndTable()
+        end
+        ImGui.PopStyleColor() -- TableHeaderBg
+        ImGui.PopStyleVar() -- CellPadding
+        ImGui.PopFont()
         if #gui.peers > 0 then
             ImGui.Text("Not grouped:")
             for i, p in ipairs(gui.peers) do
@@ -1780,23 +2231,63 @@ local function drawGUI()
             end
             if ImGui.Button("Invite Selected") then gui.requestInvite = true end
         end
+        if feather then -- extend the panel down so it's as tall as the feather
+            local needY = panelTopY + regionH
+            if ImGui.GetCursorPosY() < needY then ImGui.SetCursorPosY(needY) end
+        end
     end
 
-    -- Pages panel
-    if ImGui.CollapsingHeader(string.format("Pages (%d of 7)###pageshdr", gui.covered), ImGuiTreeNodeFlags.DefaultOpen) then
+    -- Pages panel (cards). Size cards to the live content width so all 7
+    -- always fit (was a fixed 52px - page 7 fell off the window).
+    -- Pages header: book-icon button, gold, no arrow (same as Group header)
+    ImGui.PushStyleVar(ImGuiStyleVar.ButtonTextAlign, 0.02, 0.5)
+    ImGui.PushStyleColor(ImGuiCol.Text, 0.90, 0.76, 0.36, 1)
+    if ImGui.Button(string.format("%s  Pages (%d of 7)###pageshdr", Icons.FA_BOOK, gui.covered), ImGui.GetContentRegionAvail(), 0) then
+        gui.pagesOpen = not gui.pagesOpen
+    end
+    textureLastItem(180)
+    ImGui.PopStyleColor()
+    ImGui.PopStyleVar()
+    if gui.pagesOpen then
+        local availW = ImGui.GetContentRegionAvail()
+        local cardW = math.max(38, math.floor((availW - 6 * 4) / 7)) -- 7 cards, 6 gaps of 4px
+        -- Two painted scroll states (cropped from AL's concept art): a written
+        -- scroll when HELD, a sealed "?" scroll when MISSING. HELD cards are
+        -- left clean (the found-scroll art says it all - no outline, no label);
+        -- MISSING cards get a red outline (no label) so what's needed stands out.
+        -- Every card has a gold "Pg N". No art present -> the old solid colored card.
+        local scrollFound = getArt('scrollFound')
+        local scrollMissing = getArt('scrollMissing')
+        local haveScrolls = scrollFound or scrollMissing
+        local cardH = haveScrolls and 74 or 56
         for i = 1, 7 do
             local page = gui.pages[i]
-            if page and page.holders then
-                ImGui.PushStyleColor(ImGuiCol.Text, 0.4, 1.0, 0.4, 1)
-                ImGui.Text(string.format("  Page %d: %s%s", i, page.holders, page.extra and " (extras tradeable)" or ""))
+            local held = page and page.holders
+            if i > 1 then ImGui.SameLine(0, 4) end
+            local scroll = held and scrollFound or scrollMissing
+            if scroll then
+                local cx, cy = ImGui.GetCursorScreenPos()
+                local dl = ImGui.GetWindowDrawList()
+                dl:AddImageRounded(scroll:GetTextureID(), ImVec2(cx, cy), ImVec2(cx + cardW, cy + cardH),
+                    ImVec2(0, 0), ImVec2(1, 1), IM_COL32(255, 255, 255, 255), 4)
+                if not held then -- red outline only on what's missing (held cards stay clean)
+                    dl:AddRect(ImVec2(cx, cy), ImVec2(cx + cardW, cy + cardH),
+                        IM_COL32(200, 90, 90, 255), 4, 0, 2)
+                end
+                ImGui.PushStyleColor(ImGuiCol.ChildBg, 0, 0, 0, 0)
             else
-                ImGui.PushStyleColor(ImGuiCol.Text, 1.0, 0.4, 0.4, 1)
-                ImGui.Text(string.format("  Page %d: MISSING", i))
+                ImGui.PushStyleColor(ImGuiCol.ChildBg, held and 0.14 or 0.26, held and 0.24 or 0.13, held and 0.16 or 0.13, 1)
             end
+            -- No child border when a scroll is drawn - the red AddRect (missing only) IS the border.
+            ImGui.BeginChild("##page" .. i, cardW, cardH,
+                (not scroll and ImGuiChildFlags and ImGuiChildFlags.Borders) or false)
+            -- gold "Pg N" label; no state text (the scroll art + red outline say it)
+            ImGui.PushStyleColor(ImGuiCol.Text, 0.90, 0.76, 0.36, 1); ImGui.Text("Pg " .. i); ImGui.PopStyleColor()
+            ImGui.EndChild()
             ImGui.PopStyleColor()
         end
         if not gui.collectionFresh then
-            ImGui.TextDisabled("  (stale - click Refresh)")
+            ImGui.TextDisabled("(stale - click Refresh)")
         end
     end
 
@@ -1826,6 +2317,8 @@ local function drawGUI()
     end
 
     ImGui.End()
+    ImGui.PopStyleColor(themeColors)
+    ImGui.PopStyleVar(themeVars)
 end
 
 -- Main Execution
@@ -1835,12 +2328,18 @@ local function main()
     info("looting is handled by YOUR setup (lootnscoot / CWTN loot / manual) - this script kills, it does not loot.")
     gui.driver = detectCombatDriver()
 
+    -- Auto-unstick relies on MQ2AutoSize being loaded on the boxes (size 14 pops
+    -- a ramp-wedged box loose). Ensure it across the crew (harmless if already on).
+    if not mq.TLO.Plugin('MQ2AutoSize').IsLoaded() then mq.cmd('/plugin mq2autosize load') end
+    if not isSolo() then mq.cmd('/dgga /plugin mq2autosize load') end
+
     -- Window FIRST - slow DanNet work happens in the main loop below
     -- while the status line narrates. Never make the user wait blind.
     setStatus("Loading - gathering character data, please wait...")
     mq.imgui.init('UnityGUI', drawGUI)
     gui.requestRefresh = true
 
+    local lastStuckCheck = 0
     while gui.open do
         mq.doevents()
         if gui.requestStop then
@@ -1878,6 +2377,13 @@ local function main()
         end
         if not gui.paused then
             stepStateMachine()
+        end
+        -- auto-unstick: only inside the instance, while actively running, ~1/sec
+        if not gui.paused and gui.state ~= 'IDLE' and gui.state ~= 'HOLD'
+            and (mq.TLO.Zone.ShortName() or '') == 'oldblackburrow_ann22raid'
+            and mq.gettime() - lastStuckCheck > 1000 then
+            lastStuckCheck = mq.gettime()
+            runStuckCheck()
         end
         mq.delay(100)
     end
